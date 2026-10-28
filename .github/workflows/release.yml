@@ -1,0 +1,64 @@
+# Builds, tests and publishes SkyRender + SkyRender.Character to nuget.org when a v* tag is pushed.
+# Uses nuget.org Trusted Publishing (no stored API key); see docs/PUBLISHING.md, Part 3.
+name: release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  build:
+    runs-on: windows-latest        # SkyRender.Character is a WPF library
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Check the tag matches the project version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $version = (dotnet msbuild src/SkyRender/SkyRender.csproj -getProperty:Version).Trim()
+          if ($tag -ne $version) { throw "Tag v$tag does not match project version $version" }
+
+      - run: dotnet restore SkyRender.sln
+      - run: dotnet build SkyRender.sln -c Release --no-restore -p:ContinuousIntegrationBuild=true
+      - run: dotnet test SkyRender.sln -c Release --no-build
+      - run: dotnet pack SkyRender.sln -c Release --no-build -o artifacts -p:ContinuousIntegrationBuild=true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/*
+
+  publish:
+    needs: build
+    runs-on: windows-latest
+    environment: release           # requires your approval in GitHub before anything is pushed
+    permissions:
+      id-token: write              # lets the job request the OIDC token Trusted Publishing needs
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: artifacts
+
+      # Short-lived (1 hour) nuget.org API key from the Trusted Publishing policy.
+      - name: NuGet login
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      # Core first: SkyRender.Character depends on it. Each push also uploads the .snupkg beside it.
+      - name: Push SkyRender
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem artifacts -Filter 'SkyRender.[0-9]*.nupkg' | Select-Object -First 1
+          dotnet nuget push $pkg.FullName --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
+      - name: Push SkyRender.Character
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem artifacts -Filter 'SkyRender.Character.[0-9]*.nupkg' | Select-Object -First 1
+          dotnet nuget push $pkg.FullName --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json

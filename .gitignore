@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+artifacts/
+*.nupkg
+*.snupkg
+
+# IDE / user state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.DotSettings.user
+
+# Transient WPF markup-compile projects
+*_wpftmp.csproj
+
+# Test results
+TestResults/
