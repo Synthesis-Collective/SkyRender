@@ -11,3 +11,5 @@ First public release. Earlier versions were consumed locally as `CharacterViewer
   a whole-array shape-deform hook (`IShapeDeformer`), `NifMaterialBinder` / `GlMeshFactory`,
   per-mesh `ModelTransform`, `ShadowBounds`, `AssetCache`, public cache telemetry.
 - Built-in PNG encoder; no image-library dependency.
+- Usage guide (`docs/USAGE.md`), a minimal sample viewer (`samples/SkyRender.Demo`), and
+  authorship and acknowledgements (`NOTICE.md`).

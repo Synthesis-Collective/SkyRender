@@ -12,30 +12,78 @@ OpenGL rendering for Skyrim NIF scenes, in two packages:
 The libraries take no dependency on Mutagen.Bethesda or other game-record libraries. A host
 implements a few small abstraction interfaces so the renderer can pull the data it needs:
 
-- `IBsaArchiveProvider` — enumerates/extracts files from BSA archives.
-- `IDataFolderProvider` — supplies the game Data folder + a cache token.
+- `IBsaArchiveProvider` — finds and extracts files inside BSA archives.
+- `IDataFolderProvider` — supplies the game Data folder and a cache token.
 - `IRenderLogger`, `IRenderSettings` — logging and cache sizing.
 - Character tier: `INpcMeshDataSource` (resolves an NPC to its mesh/texture paths) and
   `ICharacterViewerSettings` (extends `IRenderSettings` with the viewer's persisted settings).
 
-Entry points: `OffscreenRendererFactory.Create(IOffscreenSceneBuilder, ...)` for any scene, and
-`NpcOffscreenRendererFactory.Create(...)` for NPC portraits described by an `NpcRenderRequest`.
-Body shapes can be deformed on the CPU through a host-supplied `IShapeDeformer`.
+## Quick start
+
+```csharp
+var resolver = new GameAssetResolver(myDataFolder, myBsaProvider, logGate, logger);
+var assets   = new AssetCache(resolver, logger, logGate);
+var shapes   = assets.MeshBuilder.BuildFromFile(@"C:\path\to\model.nif");   // any thread
+
+// On the GL thread:
+var renderer = new GlRenderer();
+renderer.Initialize(ModuleResourceLocator.ShaderDirectory);
+var textures = new GlTextureManager(assets, logger);
+textures.Initialize();
+foreach (var shape in shapes)
+{
+    var mesh = GlMeshFactory.Create(shape);
+    NifMaterialBinder.Bind(textures, resolver, mesh, shape, shape.TexturePaths, new MaterialBindOptions());
+    renderer.AddMesh(mesh);
+}
+renderer.Render(camera, width, height);   // every frame
+```
+
+Offscreen rendering, NPC portraits and the interactive character viewer are covered in the
+[usage guide](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/USAGE.md).
+
+## Demo
+
+[`samples/SkyRender.Demo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.Demo)
+is a minimal WPF app: choose **Open NIF…**, and it renders the mesh with its textures (resolved from
+the game's Data folder and archives), framed automatically. Drag to orbit, middle-drag to pan, use
+the wheel to zoom.
+
+```bash
+dotnet run --project samples/SkyRender.Demo
+```
 
 ## Platform
 
-- Windows + an OpenGL 4.3-capable GPU. The core is plain `net8.0`; the character tier needs WPF.
-- GLSL shaders ship embedded in the assembly (and are also copied beside it for
-  local builds), so the package works as a `PackageReference` with no extra setup.
+- Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
+- The core is plain `net8.0`; the character tier needs WPF.
+- GLSL shaders ship embedded in the assembly (and are also copied beside it for local builds), so
+  the package works as a `PackageReference` with no extra setup.
 
 ## Documentation
 
-- [docs/RENDERING_PIPELINE.md](docs/RENDERING_PIPELINE.md): how NIF data flows through parsing,
-  materials, lighting and post-processing.
-- [docs/MIGRATING_FROM_CHARACTERVIEWER_RENDERING.md](docs/MIGRATING_FROM_CHARACTERVIEWER_RENDERING.md):
-  upgrading from the pre-3.0 `CharacterViewer.Rendering` API.
-- [CHANGELOG.md](CHANGELOG.md).
-- Maintainers: [docs/PUBLISHING.md](docs/PUBLISHING.md).
+- [Usage guide](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/USAGE.md)
+- [Rendering pipeline](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/RENDERING_PIPELINE.md):
+  how NIF data flows through parsing, materials, lighting and post-processing.
+- [Migrating from CharacterViewer.Rendering](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/MIGRATING_FROM_CHARACTERVIEWER_RENDERING.md)
+- [Changelog](https://github.com/Synthesis-Collective/SkyRender/blob/main/CHANGELOG.md)
+- Maintainers: [publishing](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/PUBLISHING.md).
+
+## Authorship
+
+SkyRender was created by **Piranha91** together with **Claude**, Anthropic's AI model. Piranha91
+directed the design, set the requirements, validated the results against the game and reviewed
+every change; Claude wrote the code. No code in the initial release was written by hand.
+
+## Acknowledgements
+
+SkyRender builds on [nifly](https://github.com/ousnius/nifly) by **ousnius**,
+[NiflySharp](https://github.com/SteveTownsend/niflyswig) by **SteveTownsend**,
+[Mutagen](https://github.com/Mutagen-Modding/Mutagen) by **Noggog**, and
+[Community Shaders](https://github.com/community-shaders/skyrim-community-shaders) by **doodlum** and
+contributors, whose HLSL lighting code was partly ported to GLSL and made character skin tint match
+the game. Details and the other libraries used are in
+[NOTICE.md](https://github.com/Synthesis-Collective/SkyRender/blob/main/NOTICE.md).
 
 ## License
 
