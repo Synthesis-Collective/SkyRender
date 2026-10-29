@@ -48,7 +48,8 @@ Two sample apps show the library at work:
 
 - [`samples/SkyRender.Demo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.Demo) is a minimal WPF viewer: choose **Open NIF…**,
   and it renders the mesh with its textures (resolved from the game's Data folder and archives),
-  framed automatically. Drag to orbit, middle-drag to pan, use the wheel to zoom.
+  framed automatically, under the studio lighting the character tier uses (**Game daylight**
+  switches to the scene look). Drag to orbit, middle-drag to pan, use the wheel to zoom.
 - [`samples/SkyRender.CellDemo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.CellDemo) draws a whole interior or exterior cell of
   the installed game: terrain, water, grass, statics, effects, weather or cell lighting, and
   optionally distant LOD.

@@ -7,6 +7,9 @@
         <Border DockPanel.Dock="Top" Padding="8" Background="#F0F0F0">
             <DockPanel>
                 <Button x:Name="OpenButton" DockPanel.Dock="Left" Padding="12,4" Click="OpenButton_Click">Open NIF…</Button>
+                <CheckBox x:Name="DaylightBox" DockPanel.Dock="Left" Margin="12,0,0,0" VerticalAlignment="Center"
+                          IsChecked="False" Checked="DaylightBox_Changed" Unchecked="DaylightBox_Changed"
+                          ToolTip="Off: the studio lighting SkyRender uses for characters (RenderProfile.Character), which suits a single model. On: the game's clear noon daylight with its fog and image space (RenderProfile.Scene), the look a whole scene is drawn with.">Game daylight</CheckBox>
                 <TextBlock DockPanel.Dock="Left" Margin="16,0,6,0" VerticalAlignment="Center">Data folder:</TextBlock>
                 <Button DockPanel.Dock="Right" Margin="6,0,0,0" Padding="8,4" Click="BrowseData_Click">Browse…</Button>
                 <TextBox x:Name="DataFolderBox" VerticalContentAlignment="Center"

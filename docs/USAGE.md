@@ -80,6 +80,12 @@ The core building blocks, in the order a scene is built:
    renderer.Render(camera, widthPx, heightPx);
    ```
 
+   `new GlRenderer()` draws with the `Scene` profile: the game's clear noon daylight, fog and image
+   space, made for whole scenes. A single model usually reads better under the studio rig the
+   character tier uses, `new GlRenderer(RenderProfile.Character)`; the sample starts that way and
+   its **Game daylight** box switches profiles (a renderer's profile is fixed when it is created,
+   so it makes a new renderer and uploads the model again).
+
 With OpenTK.GLWpfControl, start the control with an OpenGL 3.3 context and do steps 2-3 in its
 `Render` callback:
 

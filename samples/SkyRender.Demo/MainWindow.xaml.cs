@@ -26,6 +26,11 @@ public partial class MainWindow : Window
     private readonly RenderLogGate _logGate = new();
 
     private GlRenderer? _renderer;
+    // A lone model reads best under the studio rig the character tier uses; the Scene profile's
+    // noon sun, fog and image space are made for whole scenes. "Game daylight" switches to it.
+    private RenderProfile _profile = RenderProfile.Character;
+    private bool _profileChanged;
+    private PendingScene? _installed;   // the scene on screen, re-installed when the profile changes
     private GlTextureManager? _textures;
     private readonly OrbitCamera _camera = new();
     private string? _lastRenderError;
@@ -139,15 +144,29 @@ public partial class MainWindow : Window
             {
                 _logger.Info($"OpenGL {GL.GetString(StringName.Version)} on {GL.GetString(StringName.Renderer)} " +
                     $"({GL.GetString(StringName.Vendor)}).");
-                _renderer = new GlRenderer();
+            }
+            if (_renderer == null || _profileChanged)
+            {
+                // A renderer's profile is fixed when it is created: make a new one and put the
+                // current model back into it (GL thread; the old meshes and textures go with it).
+                _profileChanged = false;
+                if (_renderer != null)
+                {
+                    _renderer.ClearMeshes();
+                    _textures?.Dispose();
+                    _textures = null;
+                    _renderer.Dispose();
+                }
+                _renderer = new GlRenderer(_profile);
                 _renderer.Initialize(ModuleResourceLocator.ShaderDirectory);
-                _logger.Info("Renderer initialised.");
+                _logger.Info($"Renderer initialised ({_profile} profile).");
+                if (_pending == null && _installed is { } current) Install(current, frame: false);
             }
 
             if (_pending is { } scene)
             {
                 _pending = null;
-                Install(scene);
+                Install(scene, frame: true);
             }
 
             var source = PresentationSource.FromVisual(GlControl);
@@ -171,8 +190,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>GL-thread work: upload each shape, bind its NIF material and textures, frame the camera.</summary>
-    private void Install(PendingScene scene)
+    private void Install(PendingScene scene, bool frame)
     {
+        _installed = scene;
         var clock = Stopwatch.StartNew();
         _logger.Info("Uploading " + scene.Shapes.Count + " shape(s).");
         _renderer!.ClearMeshes();
@@ -190,7 +210,7 @@ public partial class MainWindow : Window
             _logger.Info($"  {shape.ShapeName} ready in {shapeClock.ElapsedMilliseconds} ms.");
         }
 
-        FrameCamera();
+        FrameCamera(moveCamera: frame);
         var missing = _textures.MissingTexturePaths;
         foreach (var path in missing) _logger.Info("  Texture not found: " + path);
         _logger.Info($"Scene ready in {clock.ElapsedMilliseconds} ms.");
@@ -200,8 +220,9 @@ public partial class MainWindow : Window
             (missing.Count > 0 ? $", {missing.Count} texture(s) not found" : "") + ".";
     }
 
-    /// <summary>Points the orbit camera at the scene's bounding box and fits the shadow map to it.</summary>
-    private void FrameCamera()
+    /// <summary>Fits the shadow map to the scene's bounding box and, with <paramref name="moveCamera"/>,
+    /// points the orbit camera at it.</summary>
+    private void FrameCamera(bool moveCamera)
     {
         var points = _renderer!.Meshes.Where(m => m.CpuPositions != null).SelectMany(m => m.CpuPositions!).ToList();
         if (points.Count == 0)
@@ -214,6 +235,8 @@ public partial class MainWindow : Window
         var max = new Vector3(points.Max(p => p.X), points.Max(p => p.Y), points.Max(p => p.Z));
         var center = (min + max) * 0.5f;
         float radius = Math.Max(1f, (max - min).Length * 0.5f);
+        _renderer.ShadowBounds = (center, radius);
+        if (!moveCamera) return;
 
         _camera.Target = center;
         _camera.MinDistance = radius * 0.05f;
@@ -223,7 +246,6 @@ public partial class MainWindow : Window
         _camera.Distance = radius / MathF.Sin(MathHelper.DegreesToRadians(_camera.FieldOfView) * 0.5f) * 1.1f;
         _camera.Azimuth = 180f;   // NIF models face -Z; this looks at the front.
         _camera.Elevation = 15f;
-        _renderer.ShadowBounds = (center, radius);
         _logger.Info($"Framed bounds {min} to {max}, camera distance {_camera.Distance:0.#}.");
     }
 
@@ -247,6 +269,12 @@ public partial class MainWindow : Window
         bool atEnd = LogBox.VerticalOffset + LogBox.ViewportHeight >= LogBox.ExtentHeight - 1;
         LogBox.AppendText(line + Environment.NewLine);
         if (atEnd) LogBox.ScrollToEnd();
+    }
+
+    private void DaylightBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _profile = DaylightBox.IsChecked == true ? RenderProfile.Scene : RenderProfile.Character;
+        _profileChanged = true;
     }
 
     private void VerboseBox_Changed(object sender, RoutedEventArgs e) => _logGate.Verbose = VerboseBox.IsChecked == true;

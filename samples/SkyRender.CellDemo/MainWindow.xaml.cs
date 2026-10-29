@@ -72,15 +72,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             StartGl();
-            if (_options.Size is { } size)
-            {
-                // The 3D view's size in device pixels: the screenshot size.
-                var dpi = VisualTreeHelper.GetDpi(this);
-                GlControl.Width = size.W / dpi.DpiScaleX;
-                GlControl.Height = size.H / dpi.DpiScaleY;
-                Width = GlControl.Width + 380;
-                Height = GlControl.Height + 280;
-            }
+            if (_options.Size is { } size) FitWindowToView(size.W, size.H);
             await OpenGameAsync(_options.DataFolder);
         };
         Closed += (_, _) =>
@@ -514,6 +506,36 @@ public partial class MainWindow : Window
     }
 
     // ---- scripted runs ----
+
+    /// <summary>
+    /// --size: grows or shrinks the window until the 3D view, which always fills its panel, is
+    /// <paramref name="width"/> x <paramref name="height"/> device pixels. The view row shares the
+    /// window's height with the log row, so this takes a few layout passes. If the screen will not
+    /// take a window that large, the view is pinned at the size for the run and the log says so.
+    /// </summary>
+    private void FitWindowToView(int width, int height)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double w = width / dpi.DpiScaleX, h = height / dpi.DpiScaleY;
+        int passes = 0;
+        void Adjust()
+        {
+            double dw = w - GlHost.ActualWidth, dh = h - GlHost.ActualHeight;
+            if (Math.Abs(dw) < 0.5 && Math.Abs(dh) < 0.5) return;
+            if (++passes > 8)
+            {
+                GlControl.Width = w;
+                GlControl.Height = h;
+                _log.Info($"The window cannot fit a {width} x {height} view on this screen; the view is pinned at that size.");
+                return;
+            }
+            Width += dw;
+            Height += dh;
+            // Measure again once the window has laid itself out at the new size.
+            Dispatcher.BeginInvoke(Adjust, System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+        Adjust();
+    }
 
     /// <summary>Saves the 3D view (the bound framebuffer of the GL control) as a PNG.</summary>
     private void Screenshot(int width, int height)
