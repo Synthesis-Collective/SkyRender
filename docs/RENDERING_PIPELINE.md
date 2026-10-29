@@ -1138,8 +1138,14 @@ The body colour is lit like any surface. The reflection is then mixed over the l
 
 The first noise texture is bound as the wave normal map.
 
+Checked against in-game stills of a Riverwood river at 550, 2,760, 6,620 and 11,030 units: from
+6,620 units out the game draws the river as the sky, as here. Closer in the game's water is darker
+and more opaque, with sun sparkles; here more of the bed shows through. Likely causes: the engine
+fogs the refracted ground toward the water's fog colour before the blend, and measures depth along
+the view ray, and the sun specular is not modelled.
+
 Not modelled: reflection and refraction buffers (so no reflected scenery and no refraction
-offset), the sun specular, flow maps, the second and third noise layers.
+offset), the refraction fog, the sun specular, flow maps, the second and third noise layers.
 
 ### Distance fog
 
