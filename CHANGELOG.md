@@ -1,155 +1,133 @@
 # Changelog
 
-## Unreleased
-
-- New sample `samples/SkyRender.CellDemo`: a WPF viewer that draws any interior or exterior cell of
-  the installed game at full detail (terrain, water, grass, weather or cell lighting, statics,
-  effects, placed lights, optional distant LOD and neighbouring cells). It reads the game through
-  Mutagen, a dependency of the sample only.
-- `ReferencePlacement` (`SkyRender.World`): a placed reference's `GlMesh.ModelTransform` from its
-  position, rotation and scale with the engine's rotation convention (clockwise angles, Z applied
-  first), less the model's root-node transform, which the engine does not apply to a reference
-  (`ReadRootTransform`, `FromNifTransform`, `ToMeshSpace` / `ToWorldSpace`).
-- `SkyGradient.FromSkyDome(horizon, skyLower, skyUpper, fogFar, fogMax, skyScale)` builds a
-  weather's sky gradient (the vanilla dome's masks, now shared with `SceneEnvironment.VanillaClearDay`,
-  whose values are unchanged), and `SceneEnvironment.SunDirection(...)` places the sun from a
-  climate's sunrise and sunset times on the vanilla sun path.
-- Grass is lit by the sun's plain colour. The engine's grass setup passes the sun light's diffuse
-  colour as it is, where the lighting shader multiplies it by the image space's sunlight scale (2.8
-  under the vanilla clear day), so grass now takes the key light's colour without its intensity and
-  without the daylight boost, and no fill or rim light (its constants carry one directional light).
-  Against clear-noon game captures (linear light on a grass patch, allowing for each frame's overall
-  exposure gap) grass drops from 2.2 / 1.7 times the game's level to 1.4 / 1.3; the rest is open. New disabled shader diagnostics:
-  `DEBUG_GRASS_SCALED_SUN` (the previous lighting) and `DEBUG_LINEAR_FRAME` (linear output instead of
-  the image-space finish). Meshes without `IsGrass` are unchanged.
-- Near-field grass (`SkyRender.World`). `TerrainTexture.Grasses` carries a landscape texture's grass
-  list (LTEX GNAM, as `GrassType`: the GRAS fields); `GrassPlacer.Place(cells, GrassSettings,
-  waterHeight, camera)` grows it GL-free, by the engine's rules (patches of 2 × 2 grid squares, a
-  candidate grid capped by `iMinGrassSize`, density times each texture's share of the ground, the
-  slope and water tests, brightness from the LAND vertex colour and the colour range, a random turn
-  and scale, optional fit to slope; `iMaxGrassTypesPerTexure` grasses per texture), with its own
-  seeded random numbers, so positions are repeatable but not the game's; cells beyond the fade are
-  skipped. `GrassInstanceData` packs the instances; `GlWorldFactory.CreateGrass` (with
-  `UploadGrassInstances` / `ApplyGrassMaterial`, `GlGrass`) draws each type and model shape as one
-  instanced mesh (`GlMesh.IsGrass`, `UploadInstances`, `InstanceCount`, `GrassVertexLit`,
-  `GrassFadeStart` / `GrassFadeRange`; `glDrawElementsInstanced`; shader uniform `u_grass`) with the
-  engine's grass shading: diffuse × vertex colour × brightness, lit by the sun on the instance's up
-  axis (or the vertex normal with Vertex Lighting) under its shadow plus the ambient, no point lights
-  or specular, alpha faded by `fGrassStartFadeDistance` / `fGrassFadeRange` before the alpha test.
-  Grass receives sun shadows and casts none; it is left out of the depth prepass and the wireframe
-  overlay. Meshes without `IsGrass` (every character) are unchanged.
-- Distant LOD: LOD water and LOD vertex colours. `LodKind.Water` / `LodKinds.Water` (now part of
-  `LodKinds.All`): the flat quads under each terrain LOD block's `WATER` node, read in the same pass
-  as the terrain (`LodNifReader.Read(path, includeWater)`, `LodShape.IsWater`), placed at the block at
-  each quad's own height and cut under loaded cells by segment like level-4 object LOD
-  (`LodMeshBuilder.BuildWater`). `GlWorldFactory.CreateDistantLod` takes an optional `WaterMaterial`
-  (the worldspace's LOD water type, WRLD NAM3) and draws them as the engine's LOD water technique
-  (`ApplyLodWaterMaterial`, `UploadLodWater`; `u_lodKind` 4): opaque, no depth or refraction, the
-  body `lerp(shallow, deep, fresnel)`, the sky reflection by `lerp(1, fresnel, distanceFactor)` per
-  pixel, the sun specular, fog. Without a material the water parts are not drawn. Object LOD now
-  honours `SLSF2_Vertex_Colors` (`LodShape.Colors`, `LodMeshPart.HasVertexColors`): the colour
-  multiplies the diffuse and its alpha is ignored on LOD-object shapes, as the engine does; vanilla's
-  HD mountain LOD (objHD / objsnowHD) carries such colours and draws darker than before, and
-  DynDOLOD's object and grass LOD take them too. Meshes without `DistantLod` are unchanged.
-- Distant LOD (`SkyRender.World`): `DistantLodLoader.Load(DistantLodRequest, resolveDiskPath)` reads
-  a worldspace's `lodsettings` file, picks the terrain (`.btr`), object (`.bto`) and tree (`.btt`)
-  blocks the engine would draw around a camera (`LodSelector`: a quadtree on the `[TerrainManager]`
-  distances, `LodDistances`), reads them (`LodNifReader`, `TreeLodFiles`) and builds their meshes
-  GL-free (`LodMeshBuilder`), cut away under the host's full-detail cells (`LoadedCells`): terrain
-  lowered by the engine's 230 model units and covered triangles dropped, level-4 object segments of
-  loaded cells dropped, trees in loaded cells dropped; terrain LOD keeps the engine's far depth bias. `GlWorldFactory.CreateDistantLod` uploads it
-  (`GlDistantLod`). Shading: terrain LOD with its model-space normal texture and the engine's LOD
-  noise term, object LOD from its atlas, tree LOD as crossed planes with half the sun and no N·L.
-  New `GlMesh.DistantLod` / `LodNoiseTexture` and shader uniform `u_lodKind`; meshes without
-  `DistantLod` (every character) are unchanged.
-- Environment maps follow the engine more closely (Community Shaders `Lighting.hlsl`, ENVMAP / EYE).
-  The cube map is looked up along the reflection vector in game (Z-up) axes instead of the
-  renderer's Y-up axes, so the sky face is up and the eye cube map's highlights land where the
-  game puts them. The reflection is scaled by the light reaching the surface (ambient, directional
-  and point-light diffuse), and a shape with no slot-5 mask uses its glossiness (normal-map alpha,
-  or the slot-7 map on model-space-normal shapes) instead of 1.0. Eyes and env-mapped gear change;
-  shapes without SLSF1_Environment_Mapping / SLSF1_Eye_Environment_Mapping are unchanged. New const
-  shader switches `DEBUG_ENV_UNLIT`, `DEBUG_ENV_YUP_LOOKUP` and `DEBUG_VIZ_ENV` (off).
-- Full detail by default for scenes. `GlRenderer` takes a `RenderProfile`: `Scene` (the default)
-  starts from `SceneEnvironment.VanillaClearDay` (Update.esm SkyrimClear day: sky gradient, sun,
-  ambient, distance fog near 0 / far 80000 / power 0.4 / max 0.85, and the ISSkyrimClearDAY image
-  space), which a host's own values override; `Character` keeps the studio rig, ACES tone map and
-  bloom. The character tier uses `Character`, so portraits and bodies are unchanged. New
-  `GlRenderer.ApplyEnvironment(SceneEnvironment)` and `GlRenderer.Profile`. Breaking for hosts that
-  draw with a bare `new GlRenderer()` and relied on the old studio look: pass
-  `RenderProfile.Character`.
-- `MaterialBindOptions.ShadeEffectShaders` and `WaterMaterial.PerPixelDepth` now default to true.
-  Effect-shader shapes on characters take the effect path too.
-- Billboards (`GlRenderer.Billboards`, on by default; `GlMesh.BillboardFrame`, `GlMesh.BillboardMode`,
-  `BuiltMesh.BillboardFrame`): shapes under an `NiBillboardNode` are turned toward the camera every
-  draw about the node's origin, per billboard mode, instead of keeping their authored angle (a flame
-  seen edge-on no longer draws as a sliver). The binder sets the frame for effect shapes; a turned
-  shape follows its own double-sided flag and real normal, so the double-sided and camera-facing
-  falloff stand-ins now apply only to billboards drawn in their authored pose.
-- Point lights (`GlRenderer.PointLights`, `PointLight`): up to 32 point lights over every lit
-  surface, Lambert diffuse with the engine's `1 - saturate(d / radius)^2` falloff. Lights with
-  `CastsShadow` (up to four per frame) cast shadows through a depth cube map each. Empty by
-  default, so characters and existing scenes are unchanged. The shader now asks for
-  `GL_ARB_texture_cube_map_array` (core in GL 4.0).
-- Sky gradient (`GlRenderer.SkyGradient`, `SkyGradient`, `SkyGradientKey`): a host-supplied sky
-  colour by elevation. Water that reflects the sky reflects the gradient at the elevation of the
-  reflected view ray, per pixel, instead of one sky colour, as the engine's water samples its sky
-  reflection along the reflected ray. Set by the scene defaults (see above); null on a `Character` renderer.
-- Projected materials (`GlMesh.HasProjectedMaterial`, `GlMesh.ProjectedParamsFor`): the engine's
-  single-pass `Projected_UV` path, covering a shape per pixel against its normal-mapped normal with
-  a tiling noise, so snow on rock follows the rock's relief instead of smearing across faces. Off
-  unless a host sets it; characters are unaffected.
-- Effect shaders (`GlMesh.IsEffectShader`, `NifMaterialBinder.ApplyEffectMaterial`,
-  `MaterialBindOptions.ShadeEffectShaders`): fire, smoke, mist, light shafts and glows on a
-  `BSEffectShaderProperty` are shaded with the engine's static effect path. It covers the source
-  texture times base colour, the greyscale palette for colour and alpha, `baseColorScale`,
-  view-angle falloff, soft depth fade (with the ambient-occlusion prepass), texture clamp, depth
-  test and write flags, lighting influence and `NiAlphaProperty` blending. Effect shapes cast no
-  shadow. On by default (see the full-detail entry above).
-- `BuiltMesh` reads the rest of the effect material: `EffectShaderFlags1/2`,
-  `EffectGreyscaleTexture`, `EffectFalloff`, `EffectSoftFalloffDepth`, `EffectLightingInfluence`,
-  `EffectUvScale/Offset` and `EffectTextureClampMode`. For any shape it also reports
-  `BillboardMode`, the mode of its nearest `NiBillboardNode`. Effect billboards drawn in their
-  authored pose are double-sided and their falloff is evaluated as if facing the camera.
-- Water follows the engine's water shader: the reflection is mixed over the lit body colour with
-  `lerp(1, fresnel, distanceFactor)` (Fresnel near the camera, a mirror beyond the water type's
-  noise falloff). New `WaterMaterial.ReflectsSky` (reflect `GlRenderer.SkyColor`, as the game does
-  with water reflections on), `NoiseFalloff` and `DepthFog` (`WaterDepthFog`: the above-water fog's
-  depth colour and refraction weight, so shallow water shows the ground). Without the new
-  properties the reflection is the water type's reflection colour times reflectivity; the earlier
-  ad hoc `fresnel x reflectivity x 4` mix toward sky x reflection colour is gone.
-- Water per pixel (`WaterMaterial.PerPixelDepth`, `GlMesh.WaterSceneDepth`): the water depth is
-  measured along each pixel's view ray against a depth prepass of the opaque scene, and drives the
-  body colour, the engine's refraction weight and how much of the bed shows; far away the surface
-  is all reflection, as in the game. Adds the engine's sun specular (`SunSpecularPower`,
-  `SunSpecularMagnitude`, `DepthSpecularLighting`). On by default (see above); one extra depth prepass per frame while
-  such water is drawn. Characters are unaffected.
-- Distance fog (`GlRenderer.Fog`, `DistanceFog`): the engine's fog over every lit surface, from
-  host-supplied colours and distances. Set by the scene defaults; off on a `Character` renderer.
-- Image space (`GlRenderer.ImageSpace`, `ImageSpaceFinish`): the engine's HDR tone map and
-  cinematic grade (Reinhard curve on luminance, saturation, tint, brightness and contrast about the
-  adapted luminance) in place of the ACES finish, from host-supplied image-space values. Set by
-  the scene defaults; off on a `Character` renderer. Docs: the fog parameter packing is now sourced.
-- Docs: a null `TerrainQuadrant.Base` draws white; the default landscape texture is a host fallback.
-- Docs: glow maps (`SLSF2_Glow_Map`) were already applied by `NifMaterialBinder`; the flag table
-  and Stage 5 now say so.
-
 ## 3.0.0
 
-First public release.
+First public release. SkyRender is the renderer previously built from source as
+CharacterViewer.Rendering, split into two packages and extended from single models to whole
+cells. The sections below describe the release as a whole.
 
-- Two packages: `SkyRender` (core, plain `net8.0`) and `SkyRender.Character` (NPC assembly and
-  the WPF viewer).
-- Pluggable offscreen scene builders (`IOffscreenSceneBuilder`), host overlays (`IRenderOverlay`),
-  a whole-array shape-deform hook (`IShapeDeformer`), `NifMaterialBinder` / `GlMeshFactory`,
-  per-mesh `ModelTransform`, `ShadowBounds`, `AssetCache`, public cache telemetry.
-- Native terrain and water (`SkyRender.World`): LAND heights, normals, vertex colours and up to
-  eight painted layers per quadrant with their normal maps, blended in the lit shader; water
-  surfaces with depth-based colour and live-camera Fresnel. Blend and tiling matched against
-  in-game captures.
-- Trees keep their foliage: on `SLSF2_Tree_Anim` shapes the vertex alpha is the wind weight, not
-  opacity.
-- Built-in PNG encoder; no image-library dependency.
-- Usage guide (`docs/USAGE.md`), pipeline references for the core and the character tier, a
-  minimal sample viewer with a log pane (`samples/SkyRender.Demo`), and authorship and
-  acknowledgements (`NOTICE.md`).
+### Packages and core
+
+- Two packages that share one version: `SkyRender` (plain `net8.0`: NIF parsing, Bethesda
+  materials and shaders, DDS textures, CPU skinning, the OpenGL renderer, offscreen rendering) and
+  `SkyRender.Character` (`net8.0-windows10.0.19041.0`, WPF: NPC assembly and the interactive
+  viewer). Neither depends on Mutagen or another game-record library; a host supplies the Data
+  folder, archive access and logging through small interfaces (`IDataFolderProvider`,
+  `IBsaArchiveProvider`, `IRenderLogger`, `IRenderSettings`).
+- `SkyRenderInfo.Version` reads the assembly version, so hosts can check what they loaded.
+- Pluggable offscreen scenes (`IOffscreenSceneBuilder`, `OffscreenRendererFactory`), rendering to
+  PNG or raw BGRA32 pixels, with a built-in PNG encoder and no image-library dependency.
+- Building blocks for a host's own scenes: `GlMeshFactory`, `NifMaterialBinder` with
+  `MaterialBindOptions`, per-mesh `ModelTransform`, `ShadowBounds`, the `AssetCache` with public
+  cache telemetry, host overlays (`IRenderOverlay` and the renderer's overlay primitives), and
+  `GlMesh.HostData` for a host's own per-mesh data.
+- DDS textures upload their authored mip chains compressed by default (see
+  `DdsMipPolicy` and RENDERING_PIPELINE.md, "DDS upload policy"); `decoded` opts out.
+- GLSL shaders are embedded in the assembly and also copied beside it, so a `PackageReference`
+  needs no setup and a local build can hot-edit a shader.
+- The packages carry the README, the licence text and the third-party notices. The character
+  tier's build-time weavers (PropertyChanged.Fody, ReactiveUI.Fody) are private to its build and
+  are not package dependencies.
+
+### Character tier
+
+- NPC assembly from host-resolved paths (`ResolvedNpcMeshPaths`): FaceGen heads and face tints,
+  body parts, worn meshes with biped-slot occupancy (`MeshOverride`), replacement textures, and a
+  skeleton.
+- NPC portraits offscreen (`NpcOffscreenRendererFactory`, `NpcRenderRequest`, `CameraFraming`,
+  `PrewarmAsync`).
+- The interactive viewer view model `VM_CharacterViewer` with two WPF panels
+  (`UC_CharacterViewerLightingPanel`, `UC_CharacterViewerRenderPanel`), lighting layouts and
+  presets, and a whole-array mesh-deform hook (`IShapeDeformer`,
+  `VM_CharacterViewer.ApplyShapeDeformer`).
+- Characters use `RenderProfile.Character` (the studio rig, ACES tone map and bloom), so portraits
+  keep their look while the scene defaults below change.
+
+### World: terrain, water, grass and distant LOD (`SkyRender.World`)
+
+- Terrain from LAND data: heights, normals, vertex colours and up to eight painted layers per
+  quadrant with their normal maps, blended as the engine does. A null `TerrainQuadrant.Base` draws
+  white; the game's default landscape texture is the host's fallback.
+- Water surfaces following the engine's water shader: the reflection mixed over the lit body by
+  `lerp(1, fresnel, distanceFactor)`, sky reflection (`WaterMaterial.ReflectsSky`) along the
+  reflected ray from a host-supplied `SkyGradient`, depth fog and refraction weight
+  (`WaterDepthFog`), per-pixel view-ray depth against a depth prepass
+  (`WaterMaterial.PerPixelDepth`, on by default), and the water type's sun specular.
+- Near-field grass: `TerrainTexture.Grasses` (the landscape texture's grass types),
+  `GrassPlacer.Place` (GL-free, by the engine's placement rules with repeatable seeded positions),
+  and `GlWorldFactory.CreateGrass`, one instanced mesh per grass type and model shape, shaded as the
+  engine's grass (one directional light, the sun's plain colour, distance fade before the alpha
+  test; receives sun shadows, casts none).
+- Distant LOD: `DistantLodLoader.Load` reads a worldspace's terrain, object and tree LOD and its LOD
+  water around a camera, cut away under the host's loaded cells; `GlWorldFactory.CreateDistantLod`
+  uploads it. Terrain LOD has the engine's noise term and far depth bias, object LOD honours its
+  vertex colours, tree LOD draws as crossed planes.
+- `ReferencePlacement`: a placed reference's `ModelTransform` from its position, rotation and
+  scale with the engine's rotation order, without the model's root-node transform.
+
+### Materials
+
+- Effect shaders (`BSEffectShaderProperty`): the engine's static effect shading, including the
+  greyscale palette, base colour scale, falloff, soft depth fade, clamp, depth flags, lighting
+  influence and alpha blending (`MaterialBindOptions.ShadeEffectShaders`, on by default).
+- Billboards (`GlRenderer.Billboards`, on by default): shapes under an `NiBillboardNode` turn
+  toward the camera each draw, per billboard mode.
+- Projected materials (`GlMesh.HasProjectedMaterial`): the engine's single-pass projected-UV
+  covering (snow on rock) evaluated per pixel against the normal-mapped normal.
+- Environment maps looked up in the game's Z-up axes, scaled by the light reaching the surface,
+  with glossiness as the mask on shapes without one.
+- Tree foliage keeps its leaves: on `SLSF2_Tree_Anim` shapes the vertex alpha is the wind weight,
+  not opacity. Glow maps and own-emit colours are applied by the binder.
+
+### Lighting and scene defaults
+
+- `RenderProfile`: `GlRenderer` defaults to `Scene`, which starts from
+  `SceneEnvironment.VanillaClearDay` (the vanilla clear-day weather, its image space and the noon
+  sun of the default climate): sky gradient, sun, ambient, distance fog and image space, one
+  directional light with no fill light, no rim light and no daylight boost. `ApplyEnvironment`
+  sets a host's own `SceneEnvironment`; `SkyGradient.FromSkyDome` and
+  `SceneEnvironment.SunDirection` build one from a weather and a climate.
+- Distance fog (`GlRenderer.Fog`, `DistanceFog`) in the engine's form and parameter packing.
+- Image space (`GlRenderer.ImageSpace`, `ImageSpaceFinish`): the engine's HDR tone map and
+  cinematic grade in place of the ACES finish.
+- Point lights (`GlRenderer.PointLights`): up to 32, the engine's falloff, cube-map shadows for up
+  to four.
+- RENDERING_PIPELINE.md records each choice and the in-game comparisons behind it, including what
+  is not yet matched (bloom, eye adaptation, particles).
+
+### Samples
+
+- `samples/SkyRender.Demo`: a minimal WPF viewer for one NIF with a log pane. It draws with the
+  `Character` profile, which suits a single model; **Game daylight** switches to `Scene`.
+- `samples/SkyRender.CellDemo`: a WPF viewer for any interior or exterior cell of the installed
+  game (terrain, water, grass, weather or cell lighting, statics, effects, placed lights, optional
+  distant LOD and neighbouring cells). It reads the game through Mutagen, a dependency of the
+  sample only. Its 3D view fills its panel and follows the window's size.
+
+### Breaking changes from CharacterViewer.Rendering 2.x
+
+- Namespaces: core types are in `SkyRender` and `SkyRender.Offscreen`; NPC types, the viewer and
+  its views are in `SkyRender.Character`, `SkyRender.Character.Offscreen` and
+  `SkyRender.Character.Views`.
+- Renamed: `CharacterViewerRendering.Version` to `SkyRenderInfo.Version`,
+  `CharacterViewerLogGate` to `RenderLogGate`, `ICharacterViewerLogger` to `IRenderLogger`, the
+  lighting layout, colour scheme and preset types to `LightingLayout`, `LightingColorScheme` and
+  `LightingPresets`, the NPC gender enum to `NpcGender` (`ResolvedNpcMeshPaths.Gender`),
+  `GlMesh.HiddenBySlotOccupancy` to `GlMesh.IsHiddenByHost`, and
+  `GlRenderer.MeasurementLineSegment` to `OverlayLineSegment`. Slot data moved to `mesh.Npc()`
+  (`NpcMeshInfo`, attached through `GlMesh.HostData`). The environment variables and the default
+  extraction folder use the `SKYRENDER` / `SkyRenderCache` names; the old variable names are still
+  read.
+- `ICharacterViewerSettings` keeps its property names; its cache members moved to the base
+  interface `IRenderSettings`.
+- `VM_CharacterViewer`, `NpcSceneBuilder` and the NPC offscreen factory no longer take mesh
+  deformer or morph-file parser arguments; shape deformation is the host's, through
+  `IShapeDeformer`. The NPC factory is `NpcOffscreenRendererFactory.Create(previewCache, assets,
+  settings, logGate, logger)`.
+- `OffscreenRenderRequest` holds only generic settings; NPC renders use `NpcRenderRequest`, which
+  carries the mesh paths, overrides, camera framing, `BeforeDraw` and the character tuning
+  toggles. `Morphs` / `MorphWeight` are removed.
+- Morph-file parsing, mesh deformation and measurement overlays are no longer part of the
+  library; hosts implement them on `IShapeDeformer` and `IRenderOverlay`.
+- `new GlRenderer()` now draws with the `Scene` profile. A host that relied on the old studio
+  look passes `RenderProfile.Character`.
