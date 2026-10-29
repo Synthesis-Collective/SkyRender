@@ -1066,6 +1066,11 @@ GlRenderer: the same passes as every mesh (opaque, shadow, SSAO prepass, wirefra
   normals each triangle is shaded with its face normal; without colours, white.
 - **Layers.** Each quadrant has a base texture and up to 8 alpha layers in record order, each with a
   17x17 opacity grid (VTXT positions 0..288, row by row from the bottom-left).
+- **Missing base texture.** A null `TerrainQuadrant.Base` draws the base as white. Choosing the
+  fallback is the host's job, because it depends on the game's data: for a quadrant with no BTXT, or
+  a BTXT or ATXT whose texture reference is zero, the engine draws its default landscape texture
+  (`textures\landscape\dirt02.dds` in Skyrim; UESP's LAND page, and OpenMW's ESM4 loader does the
+  same). An ATXT that no VTXT follows paints nothing.
 - **Water depth.** `TerrainHeightField.HeightAt` interpolates on the drawn triangles (each square
   splits along its (x,y)-(x+1,y+1) diagonal), so the water's depth tint follows the ground that is
   actually drawn.
