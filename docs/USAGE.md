@@ -279,6 +279,19 @@ mesh.ProjectedDiffuseTexture = textures.LoadTexture(@"textures\effects\projected
 
 See [RENDERING_PIPELINE.md, Stage 2b](RENDERING_PIPELINE.md#stage-2b-projected-material).
 
+**Effect shapes.** Fire, smoke, mist and light shafts sit on a `BSEffectShaderProperty`
+(`BuiltMesh.HasEffectShader`). Opt in to the engine's effect shading when binding:
+
+```csharp
+NifMaterialBinder.Bind(textures, assets, mesh, built, built.TexturePaths,
+    new MaterialBindOptions { ShadeEffectShaders = true });
+```
+
+A host with its own texture cache calls `NifMaterialBinder.ApplyEffectMaterial(mesh, built,
+sourceTexture, hasSourceTexture, greyscaleTexture)` instead. The shading is static: animation
+controllers and particle systems are not drawn. See
+[RENDERING_PIPELINE.md, Effect shaders](RENDERING_PIPELINE.md#effect-shaders-bseffectshaderproperty).
+
 ## 9. Configuration
 
 | Setting | Where |

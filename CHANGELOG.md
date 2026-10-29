@@ -6,6 +6,20 @@
   single-pass `Projected_UV` path, covering a shape per pixel against its normal-mapped normal with
   a tiling noise, so snow on rock follows the rock's relief instead of smearing across faces. Off
   unless a host sets it; characters are unaffected.
+- Effect shaders (`GlMesh.IsEffectShader`, `NifMaterialBinder.ApplyEffectMaterial`,
+  `MaterialBindOptions.ShadeEffectShaders`): fire, smoke, mist, light shafts and glows on a
+  `BSEffectShaderProperty` are shaded with the engine's static effect path. It covers the source
+  texture times base colour, the greyscale palette for colour and alpha, `baseColorScale`,
+  view-angle falloff, soft depth fade (with the ambient-occlusion prepass), texture clamp, depth
+  test and write flags, lighting influence and `NiAlphaProperty` blending. Effect shapes cast no
+  shadow. Off unless a host opts in, so characters are unaffected.
+- `BuiltMesh` reads the rest of the effect material: `EffectShaderFlags1/2`,
+  `EffectGreyscaleTexture`, `EffectFalloff`, `EffectSoftFalloffDepth`, `EffectLightingInfluence`,
+  `EffectUvScale/Offset` and `EffectTextureClampMode`. For any shape it also reports
+  `BillboardMode`, the mode of its nearest `NiBillboardNode`. Effect billboards are drawn
+  double-sided and their falloff is evaluated as if facing the camera.
+- Docs: glow maps (`SLSF2_Glow_Map`) were already applied by `NifMaterialBinder`; the flag table
+  and Stage 5 now say so.
 
 ## 3.0.0
 

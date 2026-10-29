@@ -216,6 +216,20 @@ The fields actually consumed downstream are:
 
 Fields explicitly ignored (read but not used, or not read at all) include `softlighting`, `backlightPower`, `refractionStrength`, all wetness/parallax/subsurface-color fields, and `skinTintColor`/`skinTintAlpha`. The skin tint stored in the NIF is always `(1, 1, 1)` with `alpha=0` for the bodies we've inspected — the engine doesn't pull body tint from there at runtime; it pulls from the NPC record's `TextureLighting` (QNAM). A host passes it as `MaterialBindOptions.SkinTintColor` (SkyRender.Character fills it from `ResolvedNpcMeshPaths.TextureLightingColor`).
 
+### BSEffectShaderProperty fields
+
+A shape whose shader property is a `BSEffectShaderProperty` sets `BuiltMesh.HasEffectShader`, and its material is read into separate `Effect*` fields so that no lighting-shader field moves for existing consumers:
+
+- `baseColor`, `baseColorScale` go to `EffectBaseColor` / `EffectBaseColorAlpha` and `EffectBaseColorScale`.
+- `shaderFlags1/2` go to `EffectShaderFlags1/2`. Same SLSF bit layout; `ShaderFlags1/2` stay zero on effect shapes, as before.
+- `greyscaleTexture` goes to `EffectGreyscaleTexture`. The source texture is slot 0, which nifly maps to `sourceTexture`.
+- `falloffStart/StopAngle`, `falloffStart/StopOpacity` go to `EffectFalloff`.
+- `softFalloffDepth` goes to `EffectSoftFalloffDepth`.
+- `uvScale`, `uvOffset` go to `EffectUvScale` / `EffectUvOffset`.
+- The texture clamp mode and lighting influence go to `EffectTextureClampMode` and `EffectLightingInfluence`. nifly reads the four bytes nif.xml lists after the source texture (clamp mode, lighting influence, env-map min LOD, unused) as one little-endian `textureClampMode` uint32, so they are split out of it.
+
+For any shape, `BillboardMode` is the `billboardMode` of the nearest `NiBillboardNode` ancestor (-1 when none). The parent walk fetches each parent by block id, because `GetParentNode` returns an untyped `NiNode` wrapper. These fields feed the [effect shading path](#effect-shaders-bseffectshaderproperty).
+
 ### BSShaderTextureSet slots
 
 Read via `nif.GetTexturePathByIndex(shape, slot)` for slots 0–8 (`BuildShape` in [NifMeshBuilder.cs](../src/SkyRender/Nif/NifMeshBuilder.cs)).
@@ -375,12 +389,12 @@ Practical consequence: opening `ChildFeet.nif` directly in NifSkope renders the 
 
 What [Appendix A](#appendix-a--shader-flag-inventory-table) catalogs by bit. Summary:
 
-- **Flags we honor directly** (the shader/host branches on them): `Specular`, `Greyscale_To_PaletteColor`, `Environment_Mapping`, `Facegen_Detail_Map`, `Model_Space_Normals`, `Eye_Environment_Mapping`, `Hair_Soft_Lighting`, `Own_Emit`, `Double_Sided`, `Vertex_Colors`, `Soft_Lighting`, `Rim_Lighting`.
+- **Flags we honor directly** (the shader/host branches on them): `Specular`, `Greyscale_To_PaletteColor`, `Environment_Mapping`, `Facegen_Detail_Map`, `Model_Space_Normals`, `Eye_Environment_Mapping`, `Hair_Soft_Lighting`, `Own_Emit`, `Double_Sided`, `Vertex_Colors`, `Glow_Map`, `Soft_Lighting`, `Rim_Lighting`. On effect-shader shapes, when a host opts in ([Effect shaders](#effect-shaders-bseffectshaderproperty)): `Greyscale_To_PaletteColor`, `Greyscale_To_PaletteAlpha`, `Use_Falloff`, `Soft_Effect`, `ZBuffer_Test`, `ZBuffer_Write`, `Double_Sided`, `Effect_Lighting`.
 - **Flags we honor *indirectly*** via a different signal that's reliably paired with the flag: `Skinned` (we check niflysharp's bone-list directly), `ZBuffer_Write` (we drive `GL_DEPTH_MASK` from `NiAlphaProperty.HasAlphaBlend`).
 - **Flags not yet implemented**: the features exist in the engine and appear in real content, but SkyRender has no code path for them yet.
 - **Flags with no rendering effect** for a viewer: local-map and other UI flags, packing hints, reserved bits.
 
-The "not yet implemented" bucket is large. SkyRender was first built for characters and has since grown into cell rendering, so the remaining gaps are mostly the engine paths scenes use: refraction, parallax and multi-layer parallax, glow maps, decals, snow and LOD fade. Landscape and water are drawn natively from host-supplied data ([Part 6](#part-6--terrain-and-water)). Effect-shader shapes (`BSEffectShaderProperty`: fire, smoke, light cones) are detected and reported (`BuiltMesh.HasEffectShader`, with their base colour) but not shaded, so hosts skip them. Built-in support for these is planned work. See Appendix A for the per-flag notes.
+The "not yet implemented" bucket is large. SkyRender was first built for characters and has since grown into cell rendering, so the remaining gaps are mostly the engine paths scenes use: refraction, parallax and multi-layer parallax, decal depth offset, multi-index snow and LOD fade. Landscape and water are drawn natively from host-supplied data ([Part 6](#part-6--terrain-and-water)). Effect-shader shapes (`BSEffectShaderProperty`: fire, smoke, mist, light shafts, glows) have their own static shading path, opt-in per mesh ([Effect shaders](#effect-shaders-bseffectshaderproperty)); their animation controllers and particle systems are not modelled. See Appendix A for the per-flag notes.
 
 ### Override channels
 
@@ -435,6 +449,79 @@ A host can switch texture slots on and off per shape (the character viewer does 
 
 > **Diffuse off writes alpha 1.0.** An alpha-tested shape (hair cards, brows, lashes) therefore draws as solid grey sheets in the main pass, while `depth_only.frag` / `shadow_depth.frag` still cut out from the diffuse alpha regardless of the toggle — so their shadows and ambient occlusion keep the cut-out shape.
 
+
+### Effect shaders (BSEffectShaderProperty)
+
+[basic.frag](../src/SkyRender/Shaders/basic.frag) (`u_isEffect`, `shadeEffect`). Fire, smoke, mist,
+light shafts and magic glows sit on a `BSEffectShaderProperty`, not a lighting shader. A mesh with
+`GlMesh.IsEffectShader` set skips every stage below and takes this path end to end. Nothing turns it
+on by itself, so characters and other existing renders are unchanged:
+
+- `NifMaterialBinder.Bind` uses it when `MaterialBindOptions.ShadeEffectShaders` is set (off by
+  default, which binds effect shapes through the lighting-shader rules as before).
+- `NifMaterialBinder.ApplyEffectMaterial(mesh, built, sourceTexture, hasSource, greyscaleTexture)`
+  sets it up for a host with its own texture cache.
+
+The math is the static path of the engine's effect pixel shader, ported from Community Shaders'
+`Effect.hlsl` with its linear-lighting option off. Static means: not animated, not membrane, not
+particles.
+
+```
+base    = sourceTexture (slot 0); alpha forced to 1 under greyscale-to-alpha
+mul     = baseColor * vertexColor                     (RGBA)
+base.a *= falloff                                      (SLSF1_Use_Falloff)
+base    = mul * base
+base.a *= saturate((sceneDepth - fragDepth) / softFalloffDepth)   (SLSF1_Soft_Effect)
+alpha   = greyscale-to-alpha ? palette(source.a, base.a).a : base.a
+rgb     = greyscale-to-color ? baseColorScale * palette(source.g, mul.r).rgb : base.rgb
+rgb     = mix(rgb, light * rgb, lightingInfluence)    (only with SLSF2_Effect_Lighting)
+```
+
+- **`baseColorScale` scales only the palette colour.** A fire's orange lives in its greyscale
+  palette, not in `baseColor`. The red channel of `baseColor x vertex colour` picks the palette
+  row, and the source texture's green channel picks the column. Vanilla flames sit at about
+  0.2-0.3, the dark-red-to-white fire row of `gradfireexplosion.dds`, whose last rows are blue.
+- **Palette sampling** clamps to the edge texels and reads mip 0. A palette is a thin gradient
+  strip, and a repeating sampler would blend the far end into a coordinate of exactly 1.
+- **Falloff**: `lerp(startOpacity, stopOpacity, smoothstep(saturate((abs(N.V) - startAngle) /
+  (stopAngle - startAngle))))`, the angles stored as cosines. The engine evaluates it per vertex;
+  here it is per pixel.
+- **Soft effects** fade where they meet geometry, using the ambient-occlusion depth prepass, which
+  holds opaque geometry only. With ambient occlusion off there is no scene depth, so only the
+  engine's discard of near-zero alpha applies and the effect stays hard-edged.
+- **Lighting influence.** With `Effect_Lighting` the light is the engine's unshadowed ambient plus
+  directional light at the object (`DLightColor`), approximated by the scene's summed lights.
+  Without the flag the engine multiplies by a per-object `PropertyColor` constant whose CPU-side
+  value is not documented. It is treated as white, so a self-lit flame stays self-lit; vanilla
+  flames carry `lightingInfluence` 255 and no `Effect_Lighting`, and burn bright in dark rooms.
+- **Billboards.** A shape under an `NiBillboardNode` (`BuiltMesh.BillboardMode`) is turned toward
+  the camera by the engine every frame. It is drawn here in its authored pose, double-sided, since
+  the engine never culls a billboard. Its falloff is evaluated as if turned: `abs(N.V) = 1`, or the
+  view direction's horizontal length for the rotate-about-up modes. Without the double-sided rule,
+  vanilla `FireplaceWood01Burning.nif` loses both flame sprites to back-face culling from half the
+  room.
+- **Texture clamp mode** (0-2) clamps the source coordinates per axis, as the engine's sampler does.
+- **Blend, test and depth.** Blending (additive `SRC_ALPHA, ONE` for flames, "over" for smoke)
+  comes from the `NiAlphaProperty` like any shape, and the alpha test runs on the final alpha.
+  Depth write follows `SLSF2_ZBuffer_Write`, and a cleared `SLSF1_ZBuffer_Test` draws without the
+  depth test. Effect shapes cast no shadow and stay out of the SSAO prepass.
+- **Output.** The output goes through the same ACES tone map and vignette as Stage 6, without the
+  fresnel contour, so a flame's `baseColorScale` of 1.5-10 compresses instead of clipping.
+- **Texture units.** The greyscale palette rides texture unit 12, the glow unit, since an effect
+  shape never has a glow map.
+- **Not modelled:**
+  - the `BSEffectShaderProperty*Controller`s that scroll UVs and animate alpha and colour (the
+    stored block values are the frame drawn);
+  - particle systems, which have no particles at rest, so vanilla `Campfire01Burning.nif` shows
+    only its ember glow;
+  - membrane, blood and projected-UV variants;
+  - fog, point lights, and refraction warps (`Plane03`-style heat planes are lighting-shader
+    shapes with a normal map in slot 0).
+- `DEBUG_VIZ_EFFECT` (0, off) shows the stage inputs: source, palette colour, final alpha, vertex
+  alpha, `abs(N.V)`, falloff, flag colours.
+
+Verified against in-game captures of the vanilla Bannered Mare (Whiterun), kitchen hearth and
+central fire pit.
 
 ### Stage 1: base color & alpha test
 
@@ -753,7 +840,7 @@ finalColor += emissiveColor * emissiveMultiple * baseColor.rgb;
 
 The multiply by `baseColor.rgb` matches NifSkope's `color = albedo * (diffuse + emissive) + spec` — emissive is bounded by the surface color, so dark regions of the diffuse (e.g., lash hairs that share a mesh with a glowing iris) don't emit. An earlier version of this stage was pure-additive (`finalColor += emissiveColor * emissiveMultiple`), which produced a saturated-yellow stomp across the entire eye-and-lash mesh on shapes like BB's Serana Replacer that ship with strong vampire-eye emissive values like `(0.89, 0.65, 0) × 1.42`.
 
-**Not yet implemented: glow maps** (slot 2 modulating emission). `Own_Emit` without a glow map is the common case on characters, but glow maps matter for enchanted weapons and armor, lit windows and glowing scene objects.
+**Glow maps** (SLSF2_Glow_Map with Own_Emit, non-skin shaders): slot 2 modulates the term per texel, `emissiveColor * emissiveMultiple * glow.rgb`, matching sk_default.frag. Typical authoring is a white emissive colour x 1 with the pattern and colour in the map (enchanted gear, lit windows). `NifMaterialBinder` binds it; a host that sets `GlMesh` up itself sets `GlowTexture` / `HasGlowMap`.
 
 ### Stage 6: tone-map, fresnel, vignette
 
@@ -1055,9 +1142,9 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 1 | Skinned | ~ | We use a stronger signal: niflysharp's `GetShapeBoneList(shape, ...)` returns the actual bone count from the SkinInstance/SkinData blocks. The flag exists to indicate the *presence* of skinning data; checking the data directly is one extra niflysharp call but correct even on malformed NIFs where the flag is out of sync. |
 | 2 | Temp_Refraction | ✗ | Engine-internal flag for water/glass refraction shapes. Refraction is not yet implemented. |
 | 3 | Vertex_Alpha | ✗ | Tells the engine to consume the vertex color's alpha channel. We use SLSF2_Vertex_Colors as the gate and always multiply `baseColor.a *= vertexColor.a` when it's set. The Vertex_Alpha-without-Vertex_Colors edge case is not handled separately. |
-| 4 | Greyscale_To_PaletteColor | ✓ | Switches the hair-tint code path to `baseColor.rrr * tint_color * scale`. |
-| 5 | Greyscale_To_PaletteAlpha | ✗ | Variant of palette tinting where the texture's alpha (not red) channel drives the lookup. Supporting it means a third palette branch in the shader. |
-| 6 | Use_Falloff | — | `BSEffectShaderProperty`-specific. Effect shaders are detected but not yet shaded (`BuiltMesh.HasEffectShader`). |
+| 4 | Greyscale_To_PaletteColor | ✓ | Lighting shader: switches the hair-tint code path to `baseColor.rrr * tint_color * scale`. Effect shader: colour = `baseColorScale × palette(source.g, baseColor.r × vertex.r)` from the greyscale texture ([Effect shaders](#effect-shaders-bseffectshaderproperty)). |
+| 5 | Greyscale_To_PaletteAlpha | ~ | Effect shader: ✓, alpha = `palette(source.a, alpha).a`. Lighting shader: ✗, it would mean a third palette branch in the hair-tint path; not seen on characters. |
+| 6 | Use_Falloff | ✓ | Effect shader only: opacity = `lerp(startOpacity, stopOpacity, smoothstep((abs(N·V) - startAngle) / (stopAngle - startAngle)))`, the angles stored as cosines. Per pixel here, per vertex in the engine. |
 | 7 | Environment_Mapping | ✓ | Enables slot 4 spherical env-map sampling. |
 | 8 | Recieve_Shadows | ✗ | We unconditionally sample the shadow map in the lighting loop when `EnableShadows` is true. Honoring it per shape needs a uniform and a branch; characters always set it, but some scene objects (sky domes, distant meshes) clear it. |
 | 9 | Cast_Shadows | ✗ | We don't read this flag. The shadow pre-pass uses heuristic culls instead (`RenderShadowDepthPass` in [GlRenderer.cs](../src/SkyRender/Gl/GlRenderer.cs)): skip pure alpha-blend shapes (their shadow would be a soft amorphous blob), skip eyes (always self-shadowing). On characters the flag is always set and the heuristic gives cleaner shadows; in scenes, honoring a cleared flag is still to do. |
@@ -1077,24 +1164,24 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 23 | Projected_UV | ~ | World-projected UVs (snow and moss coverage on scene objects). The engine sets it at runtime from a static's material object, never from the NIF, so the flag itself is not read; the single-pass path is drawn when a host sets `GlMesh.HasProjectedMaterial` ([Stage 2b](#stage-2b-projected-material)). Multi-pass materials (a second piece of geometry) are not modelled. |
 | 24 | Multiple_Textures | ✗ | Engine flag for shapes that swap their texture set based on game state. |
 | 25 | Remappable_Textures | ✗ | Runtime texture-slot remapping. |
-| 26 | Decal | ✗ | Decal mesh (drawn over another surface with depth offset). Not yet implemented; decals in cell scenes currently z-fight or draw as plain geometry. |
-| 27 | Dynamic_Decal | ✗ | Dynamically-updated decal. |
+| 26 | Decal | ~ | In the alpha-blend pass a decal never writes depth and draws after the sorted blended set in NIF block order (Pass 2 in [GlRenderer.cs](../src/SkyRender/Gl/GlRenderer.cs)), which is what character decals (hairlines, face overlays) need. The engine's depth offset for decals over coplanar surfaces is not applied, so opaque decal geometry in cell scenes can still z-fight. |
+| 27 | Dynamic_Decal | ~ | Treated as Decal. |
 | 28 | Parallax_Occlusion | ✗ | Heavy-cost parallax variant with self-occlusion sampling. |
 | 29 | External_Emittance | ✗ | Tells the engine the emissive value comes from an external source (world lighting, scripts) rather than the BSLSP-stored field. We always use the BSLSP-stored value. |
-| 30 | Soft_Effect | — | `BSEffectShaderProperty`-specific (soft particles). Effect shaders are not yet shaded. |
-| 31 | ZBuffer_Test | ✗ | We have `GL_DEPTH_TEST` enabled for the entire main pass. Honoring this per shape means disabling the depth test for the rare shape that renders without depth comparison (sky overlays and similar). |
+| 30 | Soft_Effect | ✓ | Effect shader only: alpha fades over `softFalloffDepth` as the scene surface behind comes close, and near-zero alpha is discarded. The fade needs the ambient-occlusion depth prepass (opaque geometry); without it only the discard applies. |
+| 31 | ZBuffer_Test | ~ | Effect shader: ✓, a cleared bit draws the shape without the depth test. Lighting shader: ✗, `GL_DEPTH_TEST` stays on for the whole main pass (characters always set it). |
 
 ### SLSF2 (shaderFlags2)
 
 | Bit | Name | Used | Notes |
 |---|---|---|---|
-| 0 | ZBuffer_Write | ~ | We honor this functionally via `NiAlphaProperty.HasAlphaBlend`: alpha-blended shapes get `GL.DepthMask(false)` for their pass (the main pass in `GlRenderer.Render`, [GlRenderer.cs](../src/SkyRender/Gl/GlRenderer.cs)), opaque shapes get `GL.DepthMask(true)`. Bethesda pairs the two signals — alpha-blended shapes have this flag *unset* in the BSLSP and the alpha-blend bit *set* in the AlphaProperty. We use the AlphaProperty signal because it's also what tells us to enable `GL_BLEND`, so the two decisions are co-located. |
+| 0 | ZBuffer_Write | ~ | Lighting shader: honoured functionally via `NiAlphaProperty.HasAlphaBlend`: alpha-blended shapes get `GL.DepthMask(false)` for their pass (the main pass in `GlRenderer.Render`, [GlRenderer.cs](../src/SkyRender/Gl/GlRenderer.cs)), opaque shapes get `GL.DepthMask(true)`. Bethesda pairs the two signals — alpha-blended shapes have this flag *unset* in the BSLSP and the alpha-blend bit *set* in the AlphaProperty. We use the AlphaProperty signal because it's also what tells us to enable `GL_BLEND`, so the two decisions are co-located. Effect shader: read directly (`GlMesh.DepthWrite`). |
 | 1 | LOD_Landscape | ✗ | Distant-LOD landscape. LOD is not yet implemented. |
 | 2 | LOD_Objects | ✗ | Distant-LOD object. |
 | 3 | No_Fade | ✗ | Disables LOD distance fade; relevant once LOD fade exists. |
-| 4 | Double_Sided | ✓ | Disables `GL_CULL_FACE` host-side for the shape. |
+| 4 | Double_Sided | ✓ | Disables `GL_CULL_FACE` host-side for the shape. Effect shapes under an `NiBillboardNode` are also drawn double-sided: the engine turns a billboard to face the camera, so it is never culled there. |
 | 5 | Vertex_Colors | ✓ | Enables `baseColor *= vertexColor`. |
-| 6 | Glow_Map | ✗ | Tells the engine to modulate the emissive output by slot 2 (`_g.dds` for non-skin meshes). We use slot 2 for SSS on skin shapes; for non-skin emissive shapes we apply `Own_Emit` without modulating by a glow texture. Affects enchantment glows on armor and weapons, lit windows and similar. |
+| 6 | Glow_Map | ✓ | With `Own_Emit`, slot 2 on non-skin shaders modulates the emissive term per texel (`emissiveColor × emissiveMultiple × glow.rgb`, sk_default.frag), bound by `NifMaterialBinder` ([Stage 5](#stage-5-emissive)). Enchantment glows, lit windows and similar. Skin shader types keep slot 2 as the subsurface map. |
 | 7 | Assume_Shadowmask | ✗ | Tells the engine to interpret the diffuse alpha channel as a shadow mask. |
 | 8 | Packed_Tangent | — | Indicates tangents are stored packed in vertex data with a Bethesda-specific encoding. niflysharp unpacks them transparently — we receive standard `vec3` tangents from `nif.GetTangentsForShape(shape)` regardless of this bit. |
 | 9 | Multi_Index_Snow | ✗ | Snow-coverage variant for outdoor objects. |
@@ -1118,7 +1205,7 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 27 | Back_Lighting | ✗ | Per-pixel back-lighting using a backlight texture. We have a hair-soft-lighting term but no separate skin back-lighting path. Visible on thin-skinned regions (ears, finger webs) and on foliage lit from behind; under the default lighting these don't get strong back-light, so the absence isn't striking. Adding it would mean reading slot 7 as a backlight texture (currently used for spec masks) under a different shader-flag check. |
 | 28 | Unused02 | — | Reserved. |
 | 29 | Tree_Anim | ~ | Tree wind animation. Scenes are static, so no sway is drawn, but the flag is honoured for what it changes: the vertex alpha is the sway weight, not opacity ([Part 6](#trees-slsf2_tree_anim)). |
-| 30 | Effect_Lighting | — | `BSEffectShaderProperty`-specific. Effect shaders are not yet shaded. |
+| 30 | Effect_Lighting | ~ | Effect shader only: the lit permutation, where `lightingInfluence` mixes in the light at the object. Approximated by the scene's summed ambient and directional lights, unshadowed and unoriented (the engine's `DLightColor`); point lights are not modelled. |
 | 31 | HD_LOD_Objects | ✗ | HD LOD object variant. |
 
 ---
