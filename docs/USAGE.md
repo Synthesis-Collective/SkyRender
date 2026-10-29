@@ -321,6 +321,35 @@ sourceTexture, hasSourceTexture, greyscaleTexture)` instead. The shading is stat
 controllers and particle systems are not drawn. See
 [RENDERING_PIPELINE.md, Effect shaders](RENDERING_PIPELINE.md#effect-shaders-bseffectshaderproperty).
 
+**Distant LOD.** A worldspace's terrain, object and tree LOD, drawn beyond the cells you load:
+
+```csharp
+using SkyRender.World;
+
+// Off the GL thread if you like: reads lodsettings\<w>.lod, picks the blocks the engine would draw
+// for this camera, reads them and builds the meshes, cut away under the loaded cells.
+var lod = DistantLodLoader.Load(new DistantLodRequest
+{
+    Worldspace = "Tamriel",                          // the WRLD EditorID the LOD files are named after
+    Eye = cameraPosition,                            // Skyrim world units, Z up
+    LoadedCells = new LoadedCells(loadedCellXYs),    // the cells you draw at full detail
+    MaxDistance = 409600f,                           // your far plane; push it out for LOD
+    // Kinds = LodKinds.Terrain | LodKinds.Objects,  // default: all three
+    // Distances = new LodDistances { ... },         // [TerrainManager] values; defaults are the prefs'
+}, assets.ResolveAssetPath);                         // game-relative path -> file on disk, or null
+
+// On the GL thread.
+var glLod = GlWorldFactory.CreateDistantLod(lod, textures);
+glLod.AddTo(renderer);
+// lod.BlocksSelected / BlocksFound / Parts / Errors say what went in.
+```
+
+Terrain LOD draws its block's diffuse and model-space normal texture with the engine's LOD noise
+term; object LOD its atlas; tree LOD crossed planes from the tree atlas. Under the loaded cells the
+terrain is lowered and covered triangles dropped, as the engine does, and the objects and trees of
+those cells are left out. Reload when the camera moves to another cell. Dispose `GlDistantLod` on
+the GL thread. See [RENDERING_PIPELINE.md, Distant LOD](RENDERING_PIPELINE.md#distant-lod).
+
 ## 9. Configuration
 
 | Setting | Where |

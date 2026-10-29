@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Distant LOD (`SkyRender.World`): `DistantLodLoader.Load(DistantLodRequest, resolveDiskPath)` reads
+  a worldspace's `lodsettings` file, picks the terrain (`.btr`), object (`.bto`) and tree (`.btt`)
+  blocks the engine would draw around a camera (`LodSelector`: a quadtree on the `[TerrainManager]`
+  distances, `LodDistances`), reads them (`LodNifReader`, `TreeLodFiles`) and builds their meshes
+  GL-free (`LodMeshBuilder`), cut away under the host's full-detail cells (`LoadedCells`): terrain
+  lowered by the engine's 230 model units and covered triangles dropped, level-4 object segments of
+  loaded cells dropped, trees in loaded cells dropped; terrain LOD keeps the engine's far depth bias. `GlWorldFactory.CreateDistantLod` uploads it
+  (`GlDistantLod`). Shading: terrain LOD with its model-space normal texture and the engine's LOD
+  noise term, object LOD from its atlas, tree LOD as crossed planes with half the sun and no N·L.
+  New `GlMesh.DistantLod` / `LodNoiseTexture` and shader uniform `u_lodKind`; meshes without
+  `DistantLod` (every character) are unchanged.
 - Environment maps follow the engine more closely (Community Shaders `Lighting.hlsl`, ENVMAP / EYE).
   The cube map is looked up along the reflection vector in game (Z-up) axes instead of the
   renderer's Y-up axes, so the sky face is up and the eye cube map's highlights land where the

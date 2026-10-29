@@ -40,6 +40,7 @@ A reference for how SkyRender parses NIF meshes and renders them, with side-by-s
 6. [Part 5 — GL context ownership](#part-5--gl-context-ownership)
 7. [Part 6 — Terrain and water](#part-6--terrain-and-water)
    - [Scene defaults](#scene-defaults)
+   - [Distant LOD](#distant-lod)
 8. [Appendix A — Shader flag inventory table](#appendix-a--shader-flag-inventory-table)
 9. [Appendix B — BSLightingShaderProperty field inventory](#appendix-b--bslightingshaderproperty-field-inventory)
 10. [Appendix C — Texture slot inventory](#appendix-c--texture-slot-inventory)
@@ -1402,6 +1403,83 @@ sway by it, and it is not opacity. `NifMaterialBinder` sets `GlMesh.VertexAlphaI
 flag, and `basic.frag` then keeps the vertex RGB but leaves the alpha to the texture. Before this,
 the alpha test removed most leaf cards and trees drew as bare trunks. Hosts that build meshes
 without `NifMaterialBinder` should set the property themselves.
+
+### Distant LOD
+
+`SkyRender.World` draws a worldspace's distant LOD, terrain (`.btr`), objects (`.bto`) and trees
+(`.btt`), around a camera and outside the cells a host draws at full detail. A host calls
+`DistantLodLoader.Load(DistantLodRequest, resolveDiskPath)` with the worldspace name, the camera
+and the loaded cells, then `GlWorldFactory.CreateDistantLod` on the GL thread. The loader is GL-free
+(reading, selection and geometry can run off the render thread) and finds files through the host's
+resolver (game-relative path to a file on disk, e.g. `GameAssetResolver.ResolveAssetPath`).
+
+**Files and grid** (xEdit `wbLOD.pas`; DynDOLOD manual; checked against the vanilla archives):
+
+| File | Contents |
+|---|---|
+| `lodsettings\<w>.lod` | 16 bytes: south-west cell (2 × int16), stride in cells (int32), lowest and highest level (int32). Vanilla Tamriel: (-96, -96), 256, 4..32. |
+| `meshes\terrain\<w>\<w>.L.X.Y.btr` | Terrain LOD block: a NIF whose `land` BSTriShape covers L × L cells from cell (X, Y). Shader type 18 (LOD landscape noise), `SLSF1_Model_Space_Normals`, `SLSF2_LOD_Landscape`; textures `textures\terrain\<w>\<w>.L.X.Y.dds` and `_n.dds`. A second node, `WATER`, holds flat LOD water quads with no shader; they are not drawn. |
+| `meshes\terrain\<w>\objects\<w>.L.X.Y.bto` | Object LOD block: BSSubIndexTriShapes (`obj`, `obj-LargeRef`, `objsnow`) on the atlas `textures\terrain\<w>\objects\<w>.objects.dds` with a tangent-space `_n`. Levels 4, 8 and 16 only. |
+| `meshes\terrain\<w>\trees\<w>.lst` | Tree types: int32 count, then 32 bytes each: index, width, height, atlas UV min x/y, UV max x/y, unknown. |
+| `meshes\terrain\<w>\trees\<w>.4.X.Y.btt` | Tree instances of a level-4 block: int32 type count; per type its list index, an instance count, and 32 bytes per instance: world x, y, z, rotation about Z, scale, reference FormID, two unknown. |
+| `textures\terrain\<w>\trees\<w>treelod.dds` | The tree billboard atlas. |
+
+Block coordinates are cells aligned to the south-west cell (`LodSettings.BlockFor`). LOD shapes store
+half-precision vertices with a node scale equal to their level; `LodNifReader` applies the node chain.
+Terrain LOD vertices are then local to the block's south-west corner (`tamriel.4.8.-12.btr` spans
+0..16384 on both axes) and the builder adds the block origin; object LOD vertices are already in world
+coordinates (`tamriel.4.8.-12.bto` spans x 28751..51057, y -51083..-30658) and are used as they are.
+Vanilla Tamriel has 2304 / 576 / 144 / 36 terrain blocks at levels 4 / 8 / 16 / 32.
+
+**Block selection** (`LodSelector`). The blocks form a quadtree: from the top level down, a block
+splits into its four children while the camera is within the children's reach, and every child of a
+split block is drawn (so the levels tile without holes). The reaches are the engine's
+`[TerrainManager]` settings (`LodDistances`): object LOD level 4 to `fBlockLevel0Distance`, 8 to
+`fBlockLevel1Distance`, 16 to `fBlockMaximumDistance`; terrain the same distances times
+`fSplitDistanceMult`, with no limit on its top level (32); tree LOD one level, to `fTreeLoadDistance`.
+The defaults are a launcher-written SkyrimPrefs.ini's values (60000, 90000, 250000, 1.5, 75000). The
+distance is horizontal, to the block's nearest point: the per-level reaches are documented, the
+metric the engine measures is not, so this one is a model.
+
+**Under the loaded cells** (`LodMeshBuilder`, `LoadedCells`):
+
+- Terrain: the engine's LOD landscape vertex shader lowers each vertex strictly inside the loaded
+  area by 230 model units (Community Shaders `LodLandscape.hlsli`,
+  `AdjustLodLandscapeVertexPositionMS`; 230 × the shape's scale in world units, 920 at level 4), so
+  the full terrain hides the LOD and the seam slopes under it. Vanilla BTR triangles cross cell
+  borders (372 of 2057 in `tamriel.4.0.0.btr`), so the cut cannot be a clean edge. The builder bakes
+  the same lowering into the vertices and also drops every triangle the loaded cells wholly cover.
+  The shader's far-distance depth bias (`AdjustLodLandscapeVertexPositionCS`: clip z +=
+  min(1, 1e-4 × max(0, z − 70000)) × 0.5, which keeps object LOD in front of terrain LOD far away) is
+  reproduced in `basic.vert`, doubled for GL's [-1, 1] depth range.
+- Objects: in level-4 object LOD, segment k of a BSSubIndexTriShape holds the objects of the block's
+  cell (k / 4, k % 4); the segments of loaded cells are dropped. The mapping is read off the vanilla
+  files: across all 517 vanilla level-4 blocks, 99.5% of triangles lie within one cell of the cell
+  their segment names (65% in it; the rest are large objects crossing cells), against 17% for the
+  transposed mapping. Levels 8 and 16 have one segment; there a triangle is dropped when its centre
+  is in a loaded cell.
+- Trees: an instance standing in a loaded cell is dropped.
+
+**Shading** (`GlMesh.DistantLod`, `u_lodKind` in `basic.frag`). LOD meshes take the ordinary lit path
+(sun, ambient, shadows, distance fog, image space), with the engine's LOD terms:
+
+- Terrain (Community Shaders `Lighting.hlsl`, `LODLANDNOISE`): the block's diffuse with its
+  model-space normal texture (the same `xzy` channel order as other model-space normal maps),
+  glossiness 0, and the diffuse modulated by `textures\terrain\noise.dds` tiled 3× over the block,
+  weighted by texel brightness (`GetLodLandBlendParameter` / `GetLodLandBlendMultiplier`). Which file
+  the engine binds there is not documented; that is the one terrain noise texture the base game ships.
+- Objects: the atlas and its normal map like any static (`SLSF2_LOD_Objects` shapes carry no
+  specular flag, so no specular).
+- Trees (Community Shaders `DistantTree.hlsl`): two double-sided planes crossing at 90°, standing
+  on the instance, turned about Z by its rotation, width × scale by height × scale (xEdit's width
+  and height are the tree's object bounds), the type's atlas rectangle, alpha-tested at 128/255
+  (the threshold xEdit prepares the atlas against). The engine lights them with half the sun and no
+  N·L term plus the ambient; `basic.frag` does the same for `u_lodKind == 3`. (The DynDOLOD manual
+  describes these crossed planes; they are not camera-facing billboards.)
+
+A host that draws LOD should push its far plane out (about 100 cells is the engine's render
+distance) and pass it as `DistantLodRequest.MaxDistance`. Characters never carry `DistantLod`, so
+character output is unchanged.
 
 ---
 
