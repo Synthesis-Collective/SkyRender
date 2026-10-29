@@ -26,6 +26,7 @@ A reference for how SkyRender parses NIF meshes and renders them, with side-by-s
    - [Stage 1b: tint operations](#stage-1b-tint-operations)
    - [Stage 1c: skin saturation boost](#stage-1c-skin-saturation-boost)
    - [Stage 2: normal calculation](#stage-2-normal-calculation)
+   - [Stage 2b: projected material](#stage-2b-projected-material)
    - [Stage 3: dynamic lighting](#stage-3-dynamic-lighting)
    - [Stage 4: environment mapping](#stage-4-environment-mapping)
    - [Stage 5: emissive](#stage-5-emissive)
@@ -605,6 +606,43 @@ else:
 
 **Alternatives considered**: deriving normals via screen-space derivatives of position (`dFdx/dFdy` cross product). NifSkope's `sk_msn.frag` has commented-out code for this. Rejected because vertex normals are correct on Bethesda meshes (we've verified this via the `DEBUG_VIZ_WORLD_NORMAL` debug branch); face normals would lose smoothing.
 
+### Stage 2b: projected material
+
+[basic.frag](../src/SkyRender/Shaders/basic.frag) (`u_hasProjected`). The engine's single-pass
+`Projected_UV` path: the snow, ash or moss a static's material object (MATO) lays over the shape's
+own diffuse. NIF data never turns it on; a host sets `GlMesh.HasProjectedMaterial` and its
+parameters from scene data, so characters and every other mesh draw exactly as before.
+
+```
+w      = dot(N, dir) * vertexAlpha - params.w - params.x * noise(worldXY * params.z)
+albedo = mix(base, projectedDiffuse(worldXY * params.z * tiling) * colour, smoothstep(-0.1, 0.1, w))
+```
+
+- `N` is the **normal-mapped** world normal from Stage 2, so the material settles into the base
+  texture's own relief per pixel and the tiling noise breaks its edge. Lighting keeps the base
+  normal: vanilla lerps a projected normal only into the normal buffer later image-space passes
+  read, never into the lighting normal.
+- `params` is the engine's `ProjectedUVParams`. For a single-pass material the engine builds it
+  from the material's falloff scale and bias, its noise UV scale and the placing record's max angle
+  as `((1 - cos) * scale, -, 1 / noiseUVScale, (1 - cos) * bias + cos)`;
+  `GlMesh.ProjectedParamsFor` computes exactly that, and a host that does not want the max-angle
+  fold passes 90 degrees.
+- Noise and diffuse coordinates are planar in world X/Y (Skyrim's horizontal plane); `dir` is
+  world up. `tiling` is the display setting `fProjectedUVDiffuseNormalTilingScale`.
+- `ProjectedDiffuseTexture == 0` is the engine's flat-colour path
+  (`bEnableProjecteUVDiffuseNormals` off): a hard edge in the plain colour.
+- The vertex colour multiplies the result afterwards, as it does the base albedo.
+- The two textures (in vanilla `textures\effects\projectednoise.dds` and `projecteddiffuse.dds`,
+  bound for every projected draw whatever the material) ride texture units 14 and 15, the first two
+  terrain layer-normal units, which no non-terrain draw samples, so the shader's sampler count does
+  not grow. A context with fewer than 16 units skips the stage.
+- `DEBUG_VIZ_PROJECTED_WEIGHT` (off) outputs the coverage weight as grey.
+
+Sources: the decompiled vanilla SE lighting shader (Skyrim-SE-Shader-Tools, `ProjectedUV.hlsl`),
+Community Shaders' `Lighting.hlsl` (same weight; it adds triplanar sampling and normal blending,
+not modelled here), and a reverse-engineered account of how the engine fills the constants from a
+material object. Coverage was compared against in-game captures of snowy mountain statics.
+
 ### Stage 3: dynamic lighting
 
 [basic.frag](../src/SkyRender/Shaders/basic.frag) (`MAX_LIGHTS`). The largest stage. Up to `MAX_LIGHTS = 5` lights are accumulated in a single loop:
@@ -1036,7 +1074,7 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 20 | Localmap_Hide_Secret | — | Local-map UI flag — controls whether the shape appears on the in-game local map. No rendering implication. |
 | 21 | FaceGen_RGB_Tint | ✗ | We don't branch on this bit; we apply `tint_color` unconditionally when `built.ShaderType == 5` (BSLSP_SKINTINT). In practice the bit is set whenever shader type is 5, so the type acts as a proxy. A hypothetical shape with shader type 5 and this flag *unset* would get over-tinted by us — engine would render it with the BSLSP-stored `(1,1,1)` skinTintColor instead. Not seen in practice. |
 | 22 | Own_Emit | ✓ | Enables emissive pass. |
-| 23 | Projected_UV | ✗ | World-projected UVs (terrain decals, snow and moss coverage on scene objects). |
+| 23 | Projected_UV | ~ | World-projected UVs (snow and moss coverage on scene objects). The engine sets it at runtime from a static's material object, never from the NIF, so the flag itself is not read; the single-pass path is drawn when a host sets `GlMesh.HasProjectedMaterial` ([Stage 2b](#stage-2b-projected-material)). Multi-pass materials (a second piece of geometry) are not modelled. |
 | 24 | Multiple_Textures | ✗ | Engine flag for shapes that swap their texture set based on game state. |
 | 25 | Remappable_Textures | ✗ | Runtime texture-slot remapping. |
 | 26 | Decal | ✗ | Decal mesh (drawn over another surface with depth offset). Not yet implemented; decals in cell scenes currently z-fight or draw as plain geometry. |

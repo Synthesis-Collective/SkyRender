@@ -265,6 +265,20 @@ A host that keeps its own mesh cache can build the data off-thread with `WorldMe
 `GlWorldFactory.UploadTerrain` / `ApplyTerrainMaterial` (and the water equivalents) on meshes it owns.
 Dispose a `GlTerrainCell` and the water mesh on the GL thread.
 
+**Projected materials.** Snow, ash or moss that a static's material object lays over a mesh is a
+per-mesh setting, drawn inside the mesh's own shader:
+
+```csharp
+mesh.HasProjectedMaterial = true;
+mesh.ProjectedParams = GlMesh.ProjectedParamsFor(falloffScale, falloffBias, noiseUvScale, maxAngleDegrees);
+mesh.ProjectedColor = singlePassColor;                    // 0..1
+mesh.ProjectedDiffuseTiling = 0.2f;                       // fProjectedUVDiffuseNormalTilingScale
+mesh.ProjectedNoiseTexture = textures.LoadTexture(@"textures\effects\projectednoise.dds");
+mesh.ProjectedDiffuseTexture = textures.LoadTexture(@"textures\effects\projecteddiffuse.dds");
+```
+
+See [RENDERING_PIPELINE.md, Stage 2b](RENDERING_PIPELINE.md#stage-2b-projected-material).
+
 ## 9. Configuration
 
 | Setting | Where |

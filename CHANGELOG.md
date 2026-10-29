@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Projected materials (`GlMesh.HasProjectedMaterial`, `GlMesh.ProjectedParamsFor`): the engine's
+  single-pass `Projected_UV` path, covering a shape per pixel against its normal-mapped normal with
+  a tiling noise, so snow on rock follows the rock's relief instead of smearing across faces. Off
+  unless a host sets it; characters are unaffected.
+
 ## 3.0.0
 
 First public release.
