@@ -1364,8 +1364,11 @@ for a `RenderProfile`:
 
 - **`Scene`** (the default, `new GlRenderer()`): full detail. The constructor applies
   `SceneEnvironment.VanillaClearDay` with `ApplyEnvironment`: the clear colour, the sky colour and
-  `SkyGradient`, the sun (key light), the ambient, `Fog` and `ImageSpace`. The fill light is off
-  (the engine has none). A host with its own weather, cell lighting or studio look sets those
+  `SkyGradient`, the sun (key light), the ambient, `Fog` and `ImageSpace`. The fill light is off,
+  and so are the rim light (`Lights[3]`) and the daylight boost (`DaylightBoost`): the engine's
+  lighting shader takes one directional light, the sun, with no studio gain (Community Shaders
+  `Lighting.hlsl`; a published reimplementation of the engine's lighting-shader setup). See "Rim
+  light and daylight boost" below for the in-game comparison. A host with its own weather, cell lighting or studio look sets those
   properties (or calls `ApplyEnvironment` with its own `SceneEnvironment`) and its values win.
 - **`Character`** (`new GlRenderer(RenderProfile.Character)`): the studio rig (ambient 0.2, key,
   fill, rim), ACES tone map and bloom, no fog, no image space, the grey background. The character
@@ -1397,6 +1400,50 @@ step is an in-game fit, not sourced (the bare dome is far darker and bluer than 
 The background is the gradient at 20 degrees; water reflects the gradient. The adapted luminance
 (the contrast pivot) is the retail adaptation texture read at SkyrimClear noon, fixed since a single
 frame has no adaptation history.
+
+#### Rim light and daylight boost (removed for `Scene`, 2026-10-29)
+
+Until then a `Scene` renderer kept two leftovers of the studio rig on every surface but grass: the
+rim light (white, intensity 0.25) and the daylight boost (directional light x 1.1, tinted
+(1, 0.97, 0.90)). The engine has neither. The Riverwood aerial had been matched to the game with
+them on, so the change was decided by measurement: Update.esm SkyrimClear at noon (a host's
+weather values, the climate sun, sun shadows), five in-game stills of the vanilla lab order
+(Riverwood: high aerial A, low view B and ground close-up C with grass off in game and in the
+render; the meadow L and close-up C again with grass on), matched boxes at 1920 x 1080. Linear is
+the boxes' mean luminance after undoing the ISSkyrimClearDAY finish (the same inversion on both
+images), as a ratio to the game.
+
+| Shot | Box | Game (display) | With (display / linear) | Without (display / linear) |
+|---|---|---|---|---|
+| A aerial | grass | 130, 152, 126 | 128, 160, 120 / x1.03 | 114, 149, 117 / x0.96 |
+| A aerial | grass 2 | 152, 180, 148 | 132, 164, 132 / x0.92 | 119, 153, 129 / x0.86 |
+| A aerial | path | 150, 174, 163 | 130, 158, 148 / x0.92 | 118, 149, 145 / x0.87 |
+| A aerial | rock (left) | 115, 144, 151 | 119, 156, 169 / x1.07 | 112, 151, 168 / x1.03 |
+| A aerial | rock (right) | 117, 142, 142 | 114, 148, 151 / x1.03 | 103, 139, 146 / x0.97 |
+| A aerial | roof | 169, 187, 170 | 171, 187, 170 / x1.00 | 157, 178, 166 / x0.96 |
+| B low | meadow | 113, 129, 92 | 124, 150, 81 / x1.11 | 109, 137, 78 / x1.02 |
+| B low | path | 141, 153, 136 | 134, 150, 124 / x0.97 | 119, 138, 119 / x0.91 |
+| B low | rock | 116, 135, 130 | 106, 132, 123 / x0.97 | 94, 122, 119 / x0.91 |
+| C close | grass | 97, 110, 76 | 152, 162, 96 / x1.37 | 134, 147, 92 / x1.26 |
+| C close | gravel | 65, 78, 66 | 95, 109, 86 / x1.28 | 82, 98, 81 / x1.17 |
+| C close | rock | 25, 41, 43 | 40, 59, 57 / x1.24 | 30, 49, 50 / x1.11 |
+| L meadow (grass on) | grass | 45, 53, 26 | 114, 125, 62 / x1.83 | 109, 121, 61 / x1.77 |
+| L meadow (grass on) | rock | 46, 64, 66 | 73, 93, 91 / x1.31 | 60, 81, 82 / x1.17 |
+| C close (grass on) | grass and ground | 68, 78, 52 | 132, 145, 79 / x1.60 | 123, 138, 76 / x1.53 |
+| C close (grass on) | gravel | 68, 79, 63 | 96, 110, 85 / x1.28 | 83, 99, 80 / x1.18 |
+
+Over the 16 boxes, the mean display error drops from 21.1 to 19.8 levels and the mean linear
+error from a factor of 1.19 to 1.17 (mean |ln ratio| 0.175 to 0.154); whole frames: B 8.4 to 3.7
+levels, C 31.7 to 21.2. The gain is not uniform. The two distant shots, which matched with the
+leftovers on, lose 4 to 8% and now read slightly dark (A mean display error 9.8 to 14.4 levels);
+the close shots, which were too bright, drop 3 to 11% and remain too bright, by more than the
+change (C's excess is mostly shadow coverage: the game shades about 59% of that frame, ours 37%;
+grass has its own open gap, see [Grass](#grass)). An interior lit by its cell lighting loses the
+same two terms: the Bannered Mare verify pose's frame mean goes from 56, 44, 27 to 51, 40, 23
+(game 54, 47, 33), a little darker than the game where it was a little brighter. With both aggregates closer and the engine's
+single sun as the source, the `Scene` profile drops them. The `Character` profile keeps both
+(portraits are unchanged); a host can turn them back on with `SetRimLight` / `Lights[3].Type = 2`
+and `DaylightBoost = true`.
 
 A host with another weather builds the same sky with `SkyGradient.FromSkyDome(horizon, skyLower,
 skyUpper, fogFar, fogMax, skyScale)` (the weather's colours for the time of day, its fog maximum,
