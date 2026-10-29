@@ -39,6 +39,7 @@ A reference for how SkyRender parses NIF meshes and renders them, with side-by-s
 5. [Part 4 — Comparison with NifSkope and Outfit Studio](#part-4--comparison-with-nifskope-and-outfit-studio)
 6. [Part 5 — GL context ownership](#part-5--gl-context-ownership)
 7. [Part 6 — Terrain and water](#part-6--terrain-and-water)
+   - [Scene defaults](#scene-defaults)
 8. [Appendix A — Shader flag inventory table](#appendix-a--shader-flag-inventory-table)
 9. [Appendix B — BSLightingShaderProperty field inventory](#appendix-b--bslightingshaderproperty-field-inventory)
 10. [Appendix C — Texture slot inventory](#appendix-c--texture-slot-inventory)
@@ -228,7 +229,7 @@ A shape whose shader property is a `BSEffectShaderProperty` sets `BuiltMesh.HasE
 - `uvScale`, `uvOffset` go to `EffectUvScale` / `EffectUvOffset`.
 - The texture clamp mode and lighting influence go to `EffectTextureClampMode` and `EffectLightingInfluence`. nifly reads the four bytes nif.xml lists after the source texture (clamp mode, lighting influence, env-map min LOD, unused) as one little-endian `textureClampMode` uint32, so they are split out of it.
 
-For any shape, `BillboardMode` is the `billboardMode` of the nearest `NiBillboardNode` ancestor (-1 when none). The parent walk fetches each parent by block id, because `GetParentNode` returns an untyped `NiNode` wrapper. These fields feed the [effect shading path](#effect-shaders-bseffectshaderproperty).
+For any shape, `BillboardMode` is the `billboardMode` of the nearest `NiBillboardNode` ancestor (-1 when none). The parent walk fetches each parent by block id, because `GetParentNode` returns an untyped `NiNode` wrapper. `BillboardFrame` is that node's global transform in the builder's output space (Y up): row i the node's local axis i with its scale, row 4 its origin. It is null for skinned shapes and FaceGen accessories, whose vertices do not follow the node's transform chain. These fields feed the [effect shading path](#effect-shaders-bseffectshaderproperty) and [billboards](#billboards).
 
 ### BSShaderTextureSet slots
 
@@ -454,11 +455,12 @@ A host can switch texture slots on and off per shape (the character viewer does 
 
 [basic.frag](../src/SkyRender/Shaders/basic.frag) (`u_isEffect`, `shadeEffect`). Fire, smoke, mist,
 light shafts and magic glows sit on a `BSEffectShaderProperty`, not a lighting shader. A mesh with
-`GlMesh.IsEffectShader` set skips every stage below and takes this path end to end. Nothing turns it
-on by itself, so characters and other existing renders are unchanged:
+`GlMesh.IsEffectShader` set skips every stage below and takes this path end to end:
 
-- `NifMaterialBinder.Bind` uses it when `MaterialBindOptions.ShadeEffectShaders` is set (off by
-  default, which binds effect shapes through the lighting-shader rules as before).
+- `NifMaterialBinder.Bind` uses it while `MaterialBindOptions.ShadeEffectShaders` is on (the
+  default; false binds effect shapes through the lighting-shader rules, the behaviour before this
+  path existed). Characters take it too: an effect shape on an NPC (a glow, an enchantment
+  sprite) is the one character change the scene defaults allow.
 - `NifMaterialBinder.ApplyEffectMaterial(mesh, built, sourceTexture, hasSource, greyscaleTexture)`
   sets it up for a host with its own texture cache.
 
@@ -495,11 +497,12 @@ rgb     = mix(rgb, light * rgb, lightingInfluence)    (only with SLSF2_Effect_Li
   value is not documented. It is treated as white, so a self-lit flame stays self-lit; vanilla
   flames carry `lightingInfluence` 255 and no `Effect_Lighting`, and burn bright in dark rooms.
 - **Billboards.** A shape under an `NiBillboardNode` (`BuiltMesh.BillboardMode`) is turned toward
-  the camera by the engine every frame. It is drawn here in its authored pose, double-sided, since
-  the engine never culls a billboard. Its falloff is evaluated as if turned: `abs(N.V) = 1`, or the
-  view direction's horizontal length for the rotate-about-up modes. Without the double-sided rule,
-  vanilla `FireplaceWood01Burning.nif` loses both flame sprites to back-face culling from half the
-  room.
+  the camera by the engine every frame. With the node's frame (`GlMesh.BillboardFrame`, set by the
+  binder from `BuiltMesh.BillboardFrame`) the renderer turns it too (see [Billboards](#billboards));
+  the shape's own `Double_Sided` flag and its real normal (for the falloff) then apply. Without a
+  frame, or with `GlRenderer.Billboards` off, it is drawn in its authored pose, double-sided, and
+  its falloff is evaluated as if turned: `abs(N.V) = 1`, or the view direction's horizontal length
+  for the rotate-about-up modes.
 - **Texture clamp mode** (0-2) clamps the source coordinates per axis, as the engine's sampler does.
 - **Blend, test and depth.** Blending (additive `SRC_ALPHA, ONE` for flames, "over" for smoke)
   comes from the `NiAlphaProperty` like any shape, and the alpha test runs on the final alpha.
@@ -522,6 +525,46 @@ rgb     = mix(rgb, light * rgb, lightingInfluence)    (only with SLSF2_Effect_Li
 
 Verified against in-game captures of the vanilla Bannered Mare (Whiterun), kitchen hearth and
 central fire pit.
+
+#### Billboards
+
+`GlRenderer.Billboards` (on by default) turns every mesh that carries a billboard frame
+(`GlMesh.BillboardFrame`, `GlMesh.BillboardMode`) toward the camera on each draw, about the
+billboard node's origin, as the engine's `NiBillboardNode` does. It is a per-draw model matrix
+(`GlRenderer.ApplyMeshModel` / `BillboardTurn`), used by every pass that draws the mesh (main,
+depth prepass, shadow, wireframe): with K the node's authored frame in the mesh's vertex space and
+K' the turned one (same origin and axis lengths), a vertex goes `p -> p K^-1 K'`, then through the
+mesh's placement and the shared model matrix. The camera is taken into the vertex space through
+that placement, so a host that bakes a placement into the vertices composes the frame with it
+(the frame is just another set of points and axes in the same space).
+
+Axis convention (Gamebryo): the node's local Z faces the camera and local Y is up. NifSkope draws
+every billboard by resetting the node's view rotation, which makes local X, Y, Z screen right, up
+and toward the viewer; vanilla sprites bear it out (a survey of 496 billboarded shapes in Skyrim -
+Meshes0/1.bsa: modes 0-4 are flat in local Z, the sprites of mode 5 flat in local Y). Per mode
+(nif.xml `BillboardMode`; the roll and about-up rules follow OpenMW's port,
+`components/nifosg/autotransform.cpp`):
+
+| Mode | Name | Local Z (facing) | Local Y (up) |
+|---|---|---|---|
+| 0 | ALWAYS_FACE_CAMERA | against the view direction | the authored Y, kept as upright as it can be (projected onto the screen plane) |
+| 1, 9 | ROTATE_ABOUT_UP, ROTATE_ABOUT_UP2 | toward the camera's position, in the plane normal to the authored Y | the authored Y, unchanged |
+| 2 | RIGID_FACE_CAMERA | against the view direction | the camera's up |
+| 3 | ALWAYS_FACE_CENTER | toward the camera's position | the authored Y, projected |
+| 4 | RIGID_FACE_CENTER | toward the camera's position | the camera's up, projected |
+| 5 | BSROTATE_ABOUT_UP | the authored Z, unchanged (the turn is about it) | -Y faces the camera's position |
+
+Mode 5's facing sign is not sourced: -Y keeps local X on screen right (X = Y x Z), so a sprite is
+not mirrored. The turned frame is right-handed (X = Y x Z), so front faces stay front faces and
+back-face culling keeps working: the vanilla kitchen hearth's flame sprites (mode 1) draw with
+culling on from every side. Not modelled: Gamebryo's exact roll for ALWAYS_FACE_CAMERA beyond
+OpenMW's (no source gives it), and billboards on skinned shapes (left in their authored pose).
+
+Checked by eye against in-game captures of the vanilla Bannered Mare: the kitchen hearth's flame
+sprites (mode 1), a sliver in the authored pose from the close-up and hidden from the side, now
+show as full flames where the game has them. The central fire pit's glow quad
+(`Campfire01Burning.nif` `Glow02`, mode 3) now faces the camera as a faint warm haze; that pit's
+flames are particles and still not drawn.
 
 ### Stage 1: base color & alpha test
 
@@ -1129,7 +1172,8 @@ The body colour is lit like any surface. The reflection is then mixed over the l
 - **Reflection colour.** With `ReflectsSky`, `GlRenderer.SkyColor` (default `ClearColor`): with water
   reflections on, the engine samples its reflection of the sky. Without it, the water type's
   reflection colour times its reflectivity, the engine's term when reflections are off.
-- **Sky gradient** (`GlRenderer.SkyGradient`, opt-in). With `ReflectsSky` and a gradient set, the
+- **Sky gradient** (`GlRenderer.SkyGradient`; the vanilla clear-day sky on a `Scene` renderer, null
+  on a `Character` one). With `ReflectsSky` and a gradient set, the
   reflection is the gradient's colour at the elevation of the reflected view ray, per pixel
   (`basic.frag` `skyGradientAt`): the keys are (elevation in degrees, colour), interpolated linearly
   and held beyond the first and last; up to 16. The engine's water samples its sky reflection along
@@ -1159,7 +1203,8 @@ The first noise texture is bound as the wave normal map.
 
 #### Per-pixel depth (`WaterMaterial.PerPixelDepth`)
 
-Opt-in, with `DepthFog`. The mesh is flagged `GlMesh.WaterSceneDepth`; while such water is drawn,
+On by default (`PerPixelDepth = true`), whenever the material has `DepthFog`; false keeps the
+per-vertex path. The mesh is flagged `GlMesh.WaterSceneDepth`; while such water is drawn,
 the renderer runs its depth prepass (the ambient-occlusion one, with alpha-tested shapes kept when
 it runs for water alone) and the water fragment reads the opaque scene's depth behind it. This
 follows Community Shaders' `Water.hlsl` with its `DEPTH` path:
@@ -1203,7 +1248,8 @@ own fog, flow maps, the second and third noise layers.
 
 ### Distance fog
 
-`GlRenderer.Fog` (a `DistanceFog`, null by default) fogs every lit surface last, after lighting and
+`GlRenderer.Fog` (a `DistanceFog`; vanilla clear-day fog on a `Scene` renderer, null on a
+`Character` one, see [Scene defaults](#scene-defaults)) fogs every lit surface last, after lighting and
 the water reflection, in the engine's form (Community Shaders' `Lighting.hlsl` and `Water.hlsl`):
 with d the distance from the camera, `f = min(max, saturate((d - near) / (far - near)) ^ power)`, and
 the colour moves to `lerp(nearColor, farColor, f)` by `f`. The shader takes the engine's packed
@@ -1250,7 +1296,8 @@ the per-object light limit, flicker, or something else) is not settled.
 
 ### Image space
 
-`GlRenderer.ImageSpace` (an `ImageSpaceFinish`, null by default) finishes every lit surface and the
+`GlRenderer.ImageSpace` (an `ImageSpaceFinish`; ISSkyrimClearDAY on a `Scene` renderer, null on
+a `Character` one, see [Scene defaults](#scene-defaults)) finishes every lit surface and the
 clear colour with the engine's HDR tone map and cinematic grade, in place of the renderer's ACES
 finish (and its sRGB framebuffer encode and bloom). It is the arithmetic of the retail
 `ISHDRTonemapBlendCinematic` pixel shader (Reinhard branch), with the constants the engine packs
@@ -1294,6 +1341,47 @@ saturated than the game's (mean luminance 0.47 against 0.59 on the aerial, 0.38 
 low shot), in line with the missing bloom: in the audited frame bloom added about 0.1 where it was
 sampled. Without the image space the weather-lit frame was about 1.6 to 2 times darker than the
 game.
+
+### Scene defaults
+
+Code: [Gl/SceneEnvironment.cs](../src/SkyRender/Gl/SceneEnvironment.cs). A `GlRenderer` is created
+for a `RenderProfile`:
+
+- **`Scene`** (the default, `new GlRenderer()`): full detail. The constructor applies
+  `SceneEnvironment.VanillaClearDay` with `ApplyEnvironment`: the clear colour, the sky colour and
+  `SkyGradient`, the sun (key light), the ambient, `Fog` and `ImageSpace`. The fill light is off
+  (the engine has none). A host with its own weather, cell lighting or studio look sets those
+  properties (or calls `ApplyEnvironment` with its own `SceneEnvironment`) and its values win.
+- **`Character`** (`new GlRenderer(RenderProfile.Character)`): the studio rig (ambient 0.2, key,
+  fill, rim), ACES tone map and bloom, no fog, no image space, the grey background. The character
+  tier (`VM_CharacterViewer`) creates its renderer this way, so portraits and bodies render as
+  before.
+
+Defaults that do not depend on the profile, because characters never carry what they act on:
+effect-shader shading (`MaterialBindOptions.ShadeEffectShaders`, apart from effect shapes on a
+character), billboards (`GlRenderer.Billboards`), per-pixel water depth with the water type's sun
+specular (`WaterMaterial.PerPixelDepth`), and point lights (drawn whenever a host adds them).
+Shadows and ambient occlusion stay off on both profiles: their cost and fitting depend on the scene.
+
+`VanillaClearDay` is Update.esm's SkyrimClear weather (day slot), its image space
+ISSkyrimClearDAY and the SkyrimClimate sun at 12:00, read from the records (the 8-bit colours as
+stored):
+
+| Part | Value |
+|---|---|
+| Fog | near colour (35, 98, 124), far colour (116, 168, 203); near 0, far 80000, power 0.4, max 0.85 |
+| Image space | white 1, saturation 1.5, brightness 1.135, contrast 1.4, tint (228, 214, 197) x 0.42; adapted luminance 0.367 |
+| Sun | colour (190, 181, 171) x the HDR sunlight scale 2.8; azimuth 106.5, elevation 72.9 (`SetKeyLight` convention) |
+| Ambient | (191, 214, 221), the directional ambient's Z- colour |
+| Sky | horizon (125, 163, 183), sky-lower (60, 135, 183), sky-upper (21, 77, 117) |
+
+The sky gradient mixes the three sky colours with the vanilla dome's masks
+(`meshes\sky\atmosphere.nif` vertex colours, per ring), adds the image space's sky scale (0.05),
+and sees the result through the far fog at its maximum: `(1 - 0.85) dome + 0.85 fogFar`. That last
+step is an in-game fit, not sourced (the bare dome is far darker and bluer than the game's sky).
+The background is the gradient at 20 degrees; water reflects the gradient. The adapted luminance
+(the contrast pivot) is the retail adaptation texture read at SkyrimClear noon, fixed since a single
+frame has no adaptation history.
 
 ### Trees (`SLSF2_Tree_Anim`)
 
@@ -1360,7 +1448,7 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 1 | LOD_Landscape | ✗ | Distant-LOD landscape. LOD is not yet implemented. |
 | 2 | LOD_Objects | ✗ | Distant-LOD object. |
 | 3 | No_Fade | ✗ | Disables LOD distance fade; relevant once LOD fade exists. |
-| 4 | Double_Sided | ✓ | Disables `GL_CULL_FACE` host-side for the shape. Effect shapes under an `NiBillboardNode` are also drawn double-sided: the engine turns a billboard to face the camera, so it is never culled there. |
+| 4 | Double_Sided | ✓ | Disables `GL_CULL_FACE` host-side for the shape. An effect shape under an `NiBillboardNode` is turned toward the camera ([Billboards](#billboards)) and follows its own flag; drawn in its authored pose (no frame, or `GlRenderer.Billboards` off) it is double-sided, since the engine never culls a billboard. |
 | 5 | Vertex_Colors | ✓ | Enables `baseColor *= vertexColor`. |
 | 6 | Glow_Map | ✓ | With `Own_Emit`, slot 2 on non-skin shaders modulates the emissive term per texel (`emissiveColor × emissiveMultiple × glow.rgb`, sk_default.frag), bound by `NifMaterialBinder` ([Stage 5](#stage-5-emissive)). Enchantment glows, lit windows and similar. Skin shader types keep slot 2 as the subsurface map. |
 | 7 | Assume_Shadowmask | ✗ | Tells the engine to interpret the diffuse alpha channel as a shadow mask. |

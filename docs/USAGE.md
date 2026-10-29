@@ -245,7 +245,7 @@ var cell = new TerrainCell(gridX, gridY, LandHeightDecoder.Decode(vhgtOffset, vh
 cell.Quadrants[(int)TerrainQuadrantIndex.BottomLeft] = new TerrainQuadrant
 {
     Base = new TerrainTexture(@"textures\landscape\dirt02.dds", @"textures\landscape\dirt02_n.dds"),
-    Layers = new[] { new TerrainLayer(new TerrainTexture(@"textures\landscapeieldgrass02.dds"), opacity17x17) },
+    Layers = new[] { new TerrainLayer(new TerrainTexture(@"textures\landscape\fieldgrass02.dds"), opacity17x17) },
 };
 
 var terrain = GlWorldFactory.CreateTerrain(cell, textures);   // four GlMesh, one per quadrant
@@ -331,6 +331,27 @@ controllers and particle systems are not drawn. See
 | Compressed texture uploads | environment variable `SKYRENDER_DDS_MAX_FINAL_MIP_DIMENSION` (`decoded` disables them; see `DdsMipPolicy`) |
 | Texture upload diagnostics | environment variable `SKYRENDER_DDS_DIAGNOSTICS=1` |
 | Shader hot-editing | edit the `Shaders\*.vert/.frag` copied beside the assembly; they take precedence over the embedded copies |
+
+### Defaults
+
+`new GlRenderer()` draws a scene at full detail; the character tier creates its renderer with
+`new GlRenderer(RenderProfile.Character)` and keeps the studio look. Without weather or cell data a
+scene renderer uses vanilla clear-day values (`SceneEnvironment.VanillaClearDay`, from Update.esm's
+SkyrimClear and ISSkyrimClearDAY; values in RENDERING_PIPELINE.md, "Scene defaults"). Anything a
+host sets wins.
+
+| Feature | Default | Opt out |
+|---|---|---|
+| Sky gradient, sun, ambient (vanilla clear day) | on (`Scene`) | set `ClearColor`, `SkyGradient = null`, `SetKeyLight`, ... or use `RenderProfile.Character` |
+| Distance fog | on (`Scene`) | `renderer.Fog = null` |
+| Image space (engine tone map and grade) | on (`Scene`) | `renderer.ImageSpace = null` (back to ACES and bloom) |
+| Your own scene values | - | `renderer.ApplyEnvironment(new SceneEnvironment(...))` or set the properties |
+| Effect-shader shading (fire, smoke, glows) | on | `new MaterialBindOptions { ShadeEffectShaders = false }` |
+| Billboards turned toward the camera | on | `renderer.Billboards = false` |
+| Per-pixel water depth and sun specular | on (water with `DepthFog`; the sun specular needs the water type's values) | `WaterMaterial { PerPixelDepth = false }` |
+| Point lights | drawn when added | leave `renderer.PointLights` empty |
+| Sun shadows, ambient occlusion | off | `EnableShadows`, `EnableAmbientOcclusion` to turn on |
+| Character portraits and bodies | studio rig, ACES, bloom | (unchanged) |
 
 ## 10. Threading and requirements
 

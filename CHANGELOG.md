@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Full detail by default for scenes. `GlRenderer` takes a `RenderProfile`: `Scene` (the default)
+  starts from `SceneEnvironment.VanillaClearDay` (Update.esm SkyrimClear day: sky gradient, sun,
+  ambient, distance fog near 0 / far 80000 / power 0.4 / max 0.85, and the ISSkyrimClearDAY image
+  space), which a host's own values override; `Character` keeps the studio rig, ACES tone map and
+  bloom. The character tier uses `Character`, so portraits and bodies are unchanged. New
+  `GlRenderer.ApplyEnvironment(SceneEnvironment)` and `GlRenderer.Profile`. Breaking for hosts that
+  draw with a bare `new GlRenderer()` and relied on the old studio look: pass
+  `RenderProfile.Character`.
+- `MaterialBindOptions.ShadeEffectShaders` and `WaterMaterial.PerPixelDepth` now default to true.
+  Effect-shader shapes on characters take the effect path too.
+- Billboards (`GlRenderer.Billboards`, on by default; `GlMesh.BillboardFrame`, `GlMesh.BillboardMode`,
+  `BuiltMesh.BillboardFrame`): shapes under an `NiBillboardNode` are turned toward the camera every
+  draw about the node's origin, per billboard mode, instead of keeping their authored angle (a flame
+  seen edge-on no longer draws as a sliver). The binder sets the frame for effect shapes; a turned
+  shape follows its own double-sided flag and real normal, so the double-sided and camera-facing
+  falloff stand-ins now apply only to billboards drawn in their authored pose.
 - Point lights (`GlRenderer.PointLights`, `PointLight`): up to 32 point lights over every lit
   surface, Lambert diffuse with the engine's `1 - saturate(d / radius)^2` falloff. Lights with
   `CastsShadow` (up to four per frame) cast shadows through a depth cube map each. Empty by
@@ -10,7 +26,7 @@
 - Sky gradient (`GlRenderer.SkyGradient`, `SkyGradient`, `SkyGradientKey`): a host-supplied sky
   colour by elevation. Water that reflects the sky reflects the gradient at the elevation of the
   reflected view ray, per pixel, instead of one sky colour, as the engine's water samples its sky
-  reflection along the reflected ray. Null by default (unchanged output); characters are unaffected.
+  reflection along the reflected ray. Set by the scene defaults (see above); null on a `Character` renderer.
 - Projected materials (`GlMesh.HasProjectedMaterial`, `GlMesh.ProjectedParamsFor`): the engine's
   single-pass `Projected_UV` path, covering a shape per pixel against its normal-mapped normal with
   a tiling noise, so snow on rock follows the rock's relief instead of smearing across faces. Off
@@ -21,12 +37,12 @@
   texture times base colour, the greyscale palette for colour and alpha, `baseColorScale`,
   view-angle falloff, soft depth fade (with the ambient-occlusion prepass), texture clamp, depth
   test and write flags, lighting influence and `NiAlphaProperty` blending. Effect shapes cast no
-  shadow. Off unless a host opts in, so characters are unaffected.
+  shadow. On by default (see the full-detail entry above).
 - `BuiltMesh` reads the rest of the effect material: `EffectShaderFlags1/2`,
   `EffectGreyscaleTexture`, `EffectFalloff`, `EffectSoftFalloffDepth`, `EffectLightingInfluence`,
   `EffectUvScale/Offset` and `EffectTextureClampMode`. For any shape it also reports
-  `BillboardMode`, the mode of its nearest `NiBillboardNode`. Effect billboards are drawn
-  double-sided and their falloff is evaluated as if facing the camera.
+  `BillboardMode`, the mode of its nearest `NiBillboardNode`. Effect billboards drawn in their
+  authored pose are double-sided and their falloff is evaluated as if facing the camera.
 - Water follows the engine's water shader: the reflection is mixed over the lit body colour with
   `lerp(1, fresnel, distanceFactor)` (Fresnel near the camera, a mirror beyond the water type's
   noise falloff). New `WaterMaterial.ReflectsSky` (reflect `GlRenderer.SkyColor`, as the game does
@@ -38,14 +54,14 @@
   measured along each pixel's view ray against a depth prepass of the opaque scene, and drives the
   body colour, the engine's refraction weight and how much of the bed shows; far away the surface
   is all reflection, as in the game. Adds the engine's sun specular (`SunSpecularPower`,
-  `SunSpecularMagnitude`, `DepthSpecularLighting`). Opt-in; one extra depth prepass per frame while
+  `SunSpecularMagnitude`, `DepthSpecularLighting`). On by default (see above); one extra depth prepass per frame while
   such water is drawn. Characters are unaffected.
 - Distance fog (`GlRenderer.Fog`, `DistanceFog`): the engine's fog over every lit surface, from
-  host-supplied colours and distances. Off by default, so characters are unaffected.
+  host-supplied colours and distances. Set by the scene defaults; off on a `Character` renderer.
 - Image space (`GlRenderer.ImageSpace`, `ImageSpaceFinish`): the engine's HDR tone map and
   cinematic grade (Reinhard curve on luminance, saturation, tint, brightness and contrast about the
-  adapted luminance) in place of the ACES finish, from host-supplied image-space values. Off by
-  default, so characters are unaffected. Docs: the fog parameter packing is now sourced.
+  adapted luminance) in place of the ACES finish, from host-supplied image-space values. Set by
+  the scene defaults; off on a `Character` renderer. Docs: the fog parameter packing is now sourced.
 - Docs: a null `TerrainQuadrant.Base` draws white; the default landscape texture is a host fallback.
 - Docs: glow maps (`SLSF2_Glow_Map`) were already applied by `NifMaterialBinder`; the flag table
   and Stage 5 now say so.
