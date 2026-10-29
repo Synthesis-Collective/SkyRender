@@ -848,6 +848,15 @@ public class GlRenderer : IDisposable
     /// <summary>Background clear color (RGB 0-1).</summary>
     public Vector3 ClearColor { get; set; } = new Vector3(0.41f, 0.41f, 0.41f); // DimGray
 
+    /// <summary>Colour water surfaces reflect (times their water type's reflection colour). Null
+    /// (the default) uses <see cref="ClearColor"/>, the scene's sky.</summary>
+    public Vector3? SkyColor { get; set; }
+
+    // Texture units for terrain layers 0-7: the 2D units of samplers a terrain draw never reads
+    // (skin, specular, face tint, detail, env mask, 2D env, glow), then 13. basic.frag declares
+    // texture_layer0..7 to match.
+    private static readonly int[] TerrainLayerUnits = { 2, 3, 4, 5, 7, 10, 12, 13 };
+
     /// <summary>Uniform scale applied to the world-space mesh geometry via the
     /// model matrix — 1.0 is identity; 1.1 makes the scene 10% larger (the
     /// character tier uses it for NPC height). Meshes are already in world space, so this
@@ -957,6 +966,9 @@ public class GlRenderer : IDisposable
         _shader.SetInt("u_shadowMap", 8);
         // Unit 12: glow map (units 8/9/11 are shadow / SSAO blur / depth prepass).
         _shader.SetInt("texture_glow", 12);
+        // Terrain layer diffuses reuse the 2D units terrain never samples, plus unit 13.
+        for (int i = 0; i < TerrainLayerUnits.Length; i++)
+            _shader.SetInt("texture_layer" + i, TerrainLayerUnits[i]);
 
         GL.Enable(EnableCap.DepthTest);
         // LEQUAL, not the GL default LESS: hair ships as two coincident copies
@@ -2838,6 +2850,31 @@ public class GlRenderer : IDisposable
             GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture12);
         GL.BindTexture(TextureTarget.Texture2D, mesh.HasGlowMap ? mesh.GlowTexture : 0);
+        GL.ActiveTexture(TextureUnit.Texture13);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+
+        // Terrain: bind the layer diffuses over the units the terrain draw doesn't otherwise read.
+        _shader.SetBool("u_isTerrain", mesh.IsTerrain);
+        int layerCount = mesh.IsTerrain ? Math.Min(mesh.TerrainLayerCount, TerrainLayerUnits.Length) : 0;
+        _shader.SetInt("u_terrainLayerCount", layerCount);
+        _shader.SetInt("u_terrainBlendMode", mesh.IsTerrain ? (int)mesh.TerrainBlend : 0);
+        for (int i = 0; i < layerCount; i++)
+        {
+            GL.ActiveTexture(TextureUnit.Texture0 + TerrainLayerUnits[i]);
+            GL.BindTexture(TextureTarget.Texture2D, mesh.TerrainLayerTextures[i]);
+        }
+
+        // Water: the per-vertex sky reflection (basic.vert).
+        _shader.SetBool("u_isWater", mesh.IsWater);
+        if (mesh.IsWater)
+        {
+            var sky = SkyColor ?? ClearColor;
+            var refl = mesh.WaterReflectionColor;
+            _shader.SetVector3("u_waterReflected", sky.X * refl.X, sky.Y * refl.Y, sky.Z * refl.Z);
+            _shader.SetFloat("u_waterFresnel", mesh.WaterFresnel);
+            _shader.SetFloat("u_waterReflectivity", mesh.WaterReflectivity);
+        }
+        GL.ActiveTexture(TextureUnit.Texture0);
 
         // Set material flags
         _shader.SetBool("has_normal_map", mesh.HasNormalMap);

@@ -17,6 +17,8 @@ in mat3 v_modelToViewNormalMatrix;
 in vec3 v_worldNormal;
 // World-space position used for shadow-map projection.
 in vec3 v_worldPos;
+in vec4 v_layerWeights0;
+in vec4 v_layerWeights1;
 
 #define MAX_LIGHTS 5
 
@@ -103,6 +105,39 @@ uniform sampler2D texture_envmask;
 // emissive term per texel -- the map carries the glow pattern, the material's
 // emissiveColor/emissiveMultiple carry its color/intensity (sk_default.frag).
 uniform sampler2D texture_glow;
+// Terrain layer diffuses (GlMesh.IsTerrain), in blend order. They share texture units with
+// samplers terrain never uses (skin, specular, face tint, detail, env mask, 2D env, glow),
+// plus unit 13, so the total stays within GL 3.3's guaranteed 16 units.
+uniform sampler2D texture_layer0;
+uniform sampler2D texture_layer1;
+uniform sampler2D texture_layer2;
+uniform sampler2D texture_layer3;
+uniform sampler2D texture_layer4;
+uniform sampler2D texture_layer5;
+uniform sampler2D texture_layer6;
+uniform sampler2D texture_layer7;
+uniform bool u_isTerrain;
+uniform int u_terrainLayerCount;
+// TerrainBlendMode: 0 over, weighted by opacity x texture alpha; 1 over, by opacity;
+// 2 base weight 1 plus layer opacities, normalised by their sum.
+uniform int u_terrainBlendMode;
+
+// One terrain layer over the albedo so far: "over" blending, weighted by the vertex layer
+// weight times the layer texture's alpha (what a separately drawn, alpha-blended layer
+// sheet produces).
+vec3 terrainLayer(vec3 albedo, sampler2D layer, float weight) {
+    vec4 t = texture(layer, TexCoords);
+    float w = (u_terrainBlendMode == 0) ? weight * t.a : weight;
+    return mix(albedo, t.rgb, clamp(w, 0.0, 1.0));
+}
+
+// Normalised-sum accumulation for one layer (u_terrainBlendMode == 2).
+void terrainAccumulate(inout vec3 sum, inout float total, sampler2D layer, float weight) {
+    if (weight > 0.0) {
+        sum += texture(layer, TexCoords).rgb * weight;
+        total += weight;
+    }
+}
 
 // --- MATERIAL FLAGS ---
 uniform bool has_normal_map;
@@ -433,6 +468,35 @@ void main()
     vec4 baseColor;
     if (u_enableDiffuse) {
         baseColor = texture(texture_diffuse, TexCoords);
+        if (u_isTerrain) {
+            // Terrain: the quadrant's base texture, then each alpha layer in record order.
+            // Lighting runs once on the result, below, exactly as it does for any mesh.
+            vec3 albedo = baseColor.rgb;
+            if (u_terrainBlendMode == 2) {
+                vec3 sum = albedo;
+                float total = 1.0;
+                if (u_terrainLayerCount > 0) terrainAccumulate(sum, total, texture_layer0, v_layerWeights0.x);
+                if (u_terrainLayerCount > 1) terrainAccumulate(sum, total, texture_layer1, v_layerWeights0.y);
+                if (u_terrainLayerCount > 2) terrainAccumulate(sum, total, texture_layer2, v_layerWeights0.z);
+                if (u_terrainLayerCount > 3) terrainAccumulate(sum, total, texture_layer3, v_layerWeights0.w);
+                if (u_terrainLayerCount > 4) terrainAccumulate(sum, total, texture_layer4, v_layerWeights1.x);
+                if (u_terrainLayerCount > 5) terrainAccumulate(sum, total, texture_layer5, v_layerWeights1.y);
+                if (u_terrainLayerCount > 6) terrainAccumulate(sum, total, texture_layer6, v_layerWeights1.z);
+                if (u_terrainLayerCount > 7) terrainAccumulate(sum, total, texture_layer7, v_layerWeights1.w);
+                baseColor = vec4(sum / total, 1.0);
+            } else {
+                if (u_terrainLayerCount > 0) albedo = terrainLayer(albedo, texture_layer0, v_layerWeights0.x);
+                if (u_terrainLayerCount > 1) albedo = terrainLayer(albedo, texture_layer1, v_layerWeights0.y);
+                if (u_terrainLayerCount > 2) albedo = terrainLayer(albedo, texture_layer2, v_layerWeights0.z);
+                if (u_terrainLayerCount > 3) albedo = terrainLayer(albedo, texture_layer3, v_layerWeights0.w);
+                if (u_terrainLayerCount > 4) albedo = terrainLayer(albedo, texture_layer4, v_layerWeights1.x);
+                if (u_terrainLayerCount > 5) albedo = terrainLayer(albedo, texture_layer5, v_layerWeights1.y);
+                if (u_terrainLayerCount > 6) albedo = terrainLayer(albedo, texture_layer6, v_layerWeights1.z);
+                if (u_terrainLayerCount > 7) albedo = terrainLayer(albedo, texture_layer7, v_layerWeights1.w);
+                // Terrain is opaque: landscape diffuse alpha is not coverage.
+                baseColor = vec4(albedo, 1.0);
+            }
+        }
     } else {
         baseColor = vec4(0.8, 0.8, 0.8, 1.0); // neutral gray fallback
     }
@@ -447,7 +511,12 @@ void main()
     else if (u_vertexColorMode == 2) applyVertexColors = false;
     else applyVertexColors = has_vertex_colors;
     if (applyVertexColors) {
-        baseColor.rgb *= vertexColor.rgb;
+        // Terrain vertex colours (VCLR) tint without darkening: the engine divides each by its
+        // brightest channel first. White (the default) is unchanged.
+        vec3 vc = u_isTerrain
+            ? vertexColor.rgb / max(max(max(vertexColor.r, vertexColor.g), vertexColor.b), 1e-5)
+            : vertexColor.rgb;
+        baseColor.rgb *= vc;
         baseColor.a *= vertexColor.a;
     }
 
