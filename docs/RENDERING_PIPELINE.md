@@ -1197,8 +1197,8 @@ the bed hidden. At 2,760 units the bed shows only along the shore, as in the gam
 game's water is nearly opaque with dense sun glints; here the bed still shows more (about a fifth
 at the 135-unit view-ray depth there) and the glints are sparser (one noise layer).
 
-Not modelled: reflection buffers (no reflected scenery; the reflection is one sky colour, which is
-darker than the game's sky reflection from above), the refraction offset, the refraction texture's
+Not modelled: reflection buffers (no reflected scenery; the reflection is the sky colour or the sky
+gradient above, never the world), the refraction offset, the refraction texture's
 own fog, flow maps, the second and third noise layers.
 
 ### Distance fog
@@ -1219,6 +1219,34 @@ village): with the image space below applied, the haze is no heavier than the ga
 game's distance reads paler than ours rather than bluer. The heavy blue-grey haze seen without the
 image space came from the surfaces, not the fog: lit by the unscaled sun they sat far below the fog
 colour, so the fog's lerp dominated.
+
+### Point lights
+
+`GlRenderer.PointLights` (a list of `PointLight`, empty by default) adds point lights to every lit
+surface, after the ambient and directional lights: Lambert diffuse (wrapped, `N.L * 0.5 + 0.5`, on
+soft-lit shapes as the directional loop does), times the albedo, times the engine's falloff from
+Community Shaders' `Lighting.hlsl` (the vanilla point-light term), `1 - saturate(d / radius)^2`. The
+colour is the host's, linear and already multiplied by the light's fade (for a Skyrim LIGH: its
+colour times its fade, plus a placed reference's XLIG fade offset; its radius or the reference's
+XRDS). AO is not applied (the engine keeps it to the ambient); there is no point-light specular.
+Up to 32 lights (`MaxPointLights`), all of which reach every surface within their radius; the
+engine instead gives each object its own few nearest lights.
+
+`PointLight.CastsShadow` lights (the engine's shadow-casting lights) get an omnidirectional shadow:
+up to four per frame (`MaxShadowedPointLights`), each a 1024-texel depth cube, a layer of one
+cube-map array (texture unit 22, `samplerCubeArrayShadow`, the shader's only GL 4.0 feature, taken
+through `GL_ARB_texture_cube_map_array`), rendered face by face with a 90-degree perspective from
+the light, near 1, far the radius, with the sun shadow's caster rules. The lookup compares the
+point's face depth (its largest axis distance) less 2 units. No filtering beyond the hardware's
+bilinear compare. Without such lights nothing is rendered or bound, so characters and scenes are
+unchanged.
+
+Checked against the game in the Bannered Mare (the cell's XCLL and lighting template, its image
+space and its 18 placed lights, through a host): the colour balance and the shadow structure
+match the game's kitchen and candle shots, but lit surfaces read too bright: the kitchen frame
+56,43,24 against the game's 46,37,24 (its fire carries a negative fade offset), and next to the
+central hearth (fade 2.54, no offset) about twice the game's (a wall 239,215,137 against 113,90,61). What the game does to dim them (eye adaptation,
+the per-object light limit, flicker, or something else) is not settled.
 
 ### Image space
 

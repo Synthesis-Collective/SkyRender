@@ -274,6 +274,10 @@ renderer.SkyGradient = new SkyGradient(new[]
     new SkyGradientKey(0f, horizonRgb), new SkyGradientKey(18f, skyLowerRgb), new SkyGradientKey(90f, skyUpperRgb),
 });
 
+// Optional point lights (for a Skyrim cell, its placed LIGH references): linear colour already
+// times the fade, in the scene's mesh space; shadow-casting lights get a cube shadow map.
+renderer.PointLights.Add(new PointLight(lightPos, lightRgbTimesFade, radius) { CastsShadow = castsShadow });
+
 // Optional distance fog over every lit surface (for an exterior, the weather's fog).
 renderer.Fog = new DistanceFog(fogNearRgb, fogFarRgb, near, far, power, max);
 

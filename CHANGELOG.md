@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Point lights (`GlRenderer.PointLights`, `PointLight`): up to 32 point lights over every lit
+  surface, Lambert diffuse with the engine's `1 - saturate(d / radius)^2` falloff. Lights with
+  `CastsShadow` (up to four per frame) cast shadows through a depth cube map each. Empty by
+  default, so characters and existing scenes are unchanged. The shader now asks for
+  `GL_ARB_texture_cube_map_array` (core in GL 4.0).
 - Sky gradient (`GlRenderer.SkyGradient`, `SkyGradient`, `SkyGradientKey`): a host-supplied sky
   colour by elevation. Water that reflects the sky reflects the gradient at the elevation of the
   reflected view ray, per pixel, instead of one sky colour, as the engine's water samples its sky
