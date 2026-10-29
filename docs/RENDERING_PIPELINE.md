@@ -1138,14 +1138,49 @@ The body colour is lit like any surface. The reflection is then mixed over the l
 
 The first noise texture is bound as the wave normal map.
 
-Checked against in-game stills of a Riverwood river at 550, 2,760, 6,620 and 11,030 units: from
-6,620 units out the game draws the river as the sky, as here. Closer in the game's water is darker
-and more opaque, with sun sparkles; here more of the bed shows through. Likely causes: the engine
-fogs the refracted ground toward the water's fog colour before the blend, and measures depth along
-the view ray, and the sun specular is not modelled.
+#### Per-pixel depth (`WaterMaterial.PerPixelDepth`)
 
-Not modelled: reflection and refraction buffers (so no reflected scenery and no refraction
-offset), the refraction fog, the sun specular, flow maps, the second and third noise layers.
+Opt-in, with `DepthFog`. The mesh is flagged `GlMesh.WaterSceneDepth`; while such water is drawn,
+the renderer runs its depth prepass (the ambient-occlusion one, with alpha-tested shapes kept when
+it runs for water alone) and the water fragment reads the opaque scene's depth behind it. This
+follows Community Shaders' `Water.hlsl` with its `DEPTH` path:
+
+- **Depth along the view ray.** `d` = distance to the scene behind the pixel minus distance to the
+  water fragment: `Water.hlsl` takes the depth buffer's view position, the share of the ray beyond
+  the water plane, times the ray's length (`distanceMul.x`); for one flat surface that is the same
+  length. Nothing behind (the sky) counts as deep. The vertical depth per vertex is no longer used.
+- **Body colour.** `lerp(shallow, deep, saturate(d / far))` (`refractionDiffuseColor`), then lit
+  like any surface (the engine splits it into shadowed sun and ambient).
+- **Refraction weight.** `refractionMul = 1 - saturate((far - min(d, far)) / (far - near)) ^ amount`.
+- **Composition**, the shader's vertex-colour branch:
+  `specularFraction = lerp(1, fresnel * refractionMul, distanceFactor)`,
+  `preFog = lerp(lerp(bed, body, refractionMul), reflection, specularFraction) + sun`, then the
+  distance fog. Here `bed` is the scene already in the framebuffer (the engine's refraction texture,
+  without the refraction offset), so the fragment writes the rest as colour and
+  `alpha = 1 - (1 - fog)(1 - specularFraction)(1 - refractionMul)`. Far away (`distanceFactor` 0)
+  the surface is all reflection and the bed never shows. The shader's other branch instead blends
+  the bed back in by `refractionMul` at every distance; the vertex-colour branch is the one an
+  in-game aerial bears out (below).
+- **Sun specular** (`Water.hlsl` `GetSunColor`; the same form in the vanilla `SIMPLE` technique,
+  per a published decompilation): `saturate(dot(reflect(view, normal), sunDir)) ^ power x sun x
+  magnitude`, with the water type's sun specular power and magnitude, on the noise normal. The key
+  light is the sun. It fades over shallow water by the water type's depth specular-lighting factor
+  (`depthControl.w = 1 + factor * (saturate(d / far) - 1)`). The renderer's own Blinn term is off for
+  this water. The engine's shadow on the specular is not applied.
+- Fresnel stays per vertex on the flat normal (the engine uses the noise normal).
+- The image space is applied to the water's colour before the blend, not to the blended result
+  (as for every blended surface here).
+
+Checked against in-game stills of a Riverwood river (SkyrimClear noon). From 11,000 units (the
+high aerial) the game's river is opaque and uniform (pixel standard deviation 7 to 10 per channel);
+the per-vertex path let the bed show in patches (20 to 24), the per-pixel path draws it opaque with
+the bed hidden. At 2,760 units the bed shows only along the shore, as in the game. At 550 units the
+game's water is nearly opaque with dense sun glints; here the bed still shows more (about a fifth
+at the 135-unit view-ray depth there) and the glints are sparser (one noise layer).
+
+Not modelled: reflection buffers (no reflected scenery; the reflection is one sky colour, which is
+darker than the game's sky reflection from above), the refraction offset, the refraction texture's
+own fog, flow maps, the second and third noise layers.
 
 ### Distance fog
 

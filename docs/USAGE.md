@@ -259,6 +259,10 @@ var water = GlWorldFactory.CreateWater(
             ReflectsSky = true,                          // reflect renderer.SkyColor, as the game does
             NoiseFalloff = noiseFalloff,                 // WATR noise falloff: near Fresnel, far mirror
             DepthFog = new WaterDepthFog(fogNear, fogFar, fogAmount),  // WATR above-water fog
+            PerPixelDepth = true,                        // depth along each view ray (one depth prepass)
+            SunSpecularPower = sunSpecPower,             // WATR sun specular power / magnitude and
+            SunSpecularMagnitude = sunSpecMagnitude,     //   depth specular lighting
+            DepthSpecularLighting = depthSpecular,
         }),
     new TerrainHeightField(new[] { cell }), textures);
 renderer.AddMesh(water);

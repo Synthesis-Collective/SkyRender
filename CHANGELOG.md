@@ -25,6 +25,12 @@
   depth colour and refraction weight, so shallow water shows the ground). Without the new
   properties the reflection is the water type's reflection colour times reflectivity; the earlier
   ad hoc `fresnel x reflectivity x 4` mix toward sky x reflection colour is gone.
+- Water per pixel (`WaterMaterial.PerPixelDepth`, `GlMesh.WaterSceneDepth`): the water depth is
+  measured along each pixel's view ray against a depth prepass of the opaque scene, and drives the
+  body colour, the engine's refraction weight and how much of the bed shows; far away the surface
+  is all reflection, as in the game. Adds the engine's sun specular (`SunSpecularPower`,
+  `SunSpecularMagnitude`, `DepthSpecularLighting`). Opt-in; one extra depth prepass per frame while
+  such water is drawn. Characters are unaffected.
 - Distance fog (`GlRenderer.Fog`, `DistanceFog`): the engine's fog over every lit surface, from
   host-supplied colours and distances. Off by default, so characters are unaffected.
 - Image space (`GlRenderer.ImageSpace`, `ImageSpaceFinish`): the engine's HDR tone map and
