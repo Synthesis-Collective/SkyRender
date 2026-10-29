@@ -51,6 +51,8 @@ fallback when a shape has no baked tint, plus one exception:
 [skin tint](RENDERING_PIPELINE.md#skin-tint-body) and its
 [engine-source cross-check](RENDERING_PIPELINE.md#engine-source-cross-check-verified-against-cs).
 
+**Eye and armour reflections.** Eyes (BSLSP_EYE, `eyeCubemapScale`, vanilla `textures\cubemaps\eyecubemap.dds` with the `EyeEnvironmentMask_M.dds` mask) and env-mapped armour (`envMapScale`, slot 4 / slot 5) go through the core [environment-mapping stage](RENDERING_PIPELINE.md#stage-4-environment-mapping): the cube map is looked up in game axes and scaled by the light reaching the surface. The character tier adds nothing of its own beyond classifying ENVMAP-typed eyeballs as eyes (`ResolvedNpcMeshPaths.EyeShapeNames`), which keeps their authored `envMapScale`.
+
 ## Shape deformation and prewarm
 
 ### Shape deformation hook (`IShapeDeformer`)

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Environment maps follow the engine more closely (Community Shaders `Lighting.hlsl`, ENVMAP / EYE).
+  The cube map is looked up along the reflection vector in game (Z-up) axes instead of the
+  renderer's Y-up axes, so the sky face is up and the eye cube map's highlights land where the
+  game puts them. The reflection is scaled by the light reaching the surface (ambient, directional
+  and point-light diffuse), and a shape with no slot-5 mask uses its glossiness (normal-map alpha,
+  or the slot-7 map on model-space-normal shapes) instead of 1.0. Eyes and env-mapped gear change;
+  shapes without SLSF1_Environment_Mapping / SLSF1_Eye_Environment_Mapping are unchanged. New const
+  shader switches `DEBUG_ENV_UNLIT`, `DEBUG_ENV_YUP_LOOKUP` and `DEBUG_VIZ_ENV` (off).
 - Full detail by default for scenes. `GlRenderer` takes a `RenderProfile`: `Scene` (the default)
   starts from `SceneEnvironment.VanillaClearDay` (Update.esm SkyrimClear day: sky gradient, sun,
   ambient, distance fog near 0 / far 80000 / power 0.4 / max 0.85, and the ISSkyrimClearDAY image

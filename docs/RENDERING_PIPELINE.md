@@ -846,30 +846,42 @@ When `is_eye` (BSLSP_EYE shader type, ID 16) and the light is the key light: a t
 
 ```glsl
 viewDirWorld = normalize(u_cameraPos - v_worldPos);
-reflectWorld = reflect(-viewDirWorld, normalize(v_worldNormal));
+nWorld       = normalize(transpose(mat3(u_view)) * normal_viewSpace); // bumped normal, world space
+reflectWorld = reflect(-viewDirWorld, nWorld);
+reflectGame  = vec3(reflectWorld.x, -reflectWorld.z, reflectWorld.y); // Y-up -> game Z-up
 
 if (is_env_map_2d) {
-    // Legacy spherical-2D fallback for mod-shipped panoramic envmaps
-    float m = 2.0 * sqrt(rx*rx + ry*ry + (rz+1)*(rz+1));
-    envColor = texture(texture_envmap_2d, vec2(rx/m + 0.5, ry/m + 0.5)).rgb;
+    // Legacy spherical-2D fallback for mod-shipped panoramic envmaps (Y-up vector)
+    envColor = texture(texture_envmap_2d, sphereUV(reflectWorld)).rgb;
 } else {
     // Engine-faithful cubemap path (vanilla DDS cubemaps)
-    envColor = texture(texture_envmap, reflectWorld).rgb;
+    envColor = texture(texture_envmap, reflectGame).rgb;
 }
 
-envMask = has_env_mask ? texture(envmask, TexCoords).r : 1.0;
-finalColor += envColor * envMask * scale;
+envMask = has_env_mask                       ? texture(envmask, uv).r    // slot 5
+        : is_model_space && has_specular_map ? texture(specular, uv).r   // slot 7 gloss
+        : has_normal_map                     ? texture(normal, uv).a     // normal-alpha gloss
+        :                                      1.0;
+finalColor += envColor * envMask * scale * envIrradiance;
 ```
+
+This follows Community Shaders' `Lighting.hlsl` ENVMAP / EYE path: `envMask = EnvmapData.x * (hasEnvMask ? envMask.x : glossiness)`, the cube map sampled along the reflection of the view vector about the world normal, and `specularColor += envColor * diffuseColor`, where `diffuseColor` is the accumulated diffuse light plus the directional ambient. `envIrradiance` is that sum here: every ambient light's colour, each directional light's `diffuseStrength * lightColor * shadow`, and each point light's attenuated Lambert term, all before the albedo multiply. So a reflection is bright where the surface is lit and fades into shadow, and it is never tinted by the diffuse texture. (CS also converts the sample with `SkyrimGammaToLinear` because it lights in linear space; the renderer lights in the engine's gamma space, so it uses the sample as is.)
 
 `scale` arrives pre-selected from the host: GlRenderer sends the NIF's `eyeCubemapScale` for BSLSP_EYE (shader type 16) shapes and `envMapScale` for everything else, matching the engine. The selection is deliberately keyed on shader type rather than `is_eye` -- semantic eyes authored as BSLSP_ENVMAP (classified `IsEye` via host head-part data) take their authored `envMapScale` in-game.
 
-**Cubemap loading.** Vanilla Skyrim envmaps in slot 4 are DDS cubemaps (`Caps2 & 0xFE00 == 0xFE00` → all six face flags set). Pfim 0.11.4 reads only the first face of a multi-face DDS, so [`AssetCache.DecodeDdsCubemap`](../src/SkyRender/Assets/AssetCache.cs) parses the 124-byte DDS_HEADER itself, slices the payload into six equal face buffers (DDS spec stores faces in `+X, -X, +Y, -Y, +Z, -Z` order, sequentially after the header), and feeds each face through Pfim as a synthesized "single-face" DDS stream — same header with the cubemap bits cleared from `Caps2`, prefixed to that face's bytes. This decouples the cubemap-detection step from Pfim's lack of multi-face support without requiring a different DDS library.
+**Glossiness fallback.** A shape with no slot-5 mask reflects only as much as its glossiness, which is the normal map's alpha (the slot-7 specular map on model-space-normal shapes), as in the engine. Before 2026-10 the renderer used 1.0 there, so mask-less shapes (the vanilla glass cuirass's outer plates, Argonian and Khajiit eyes) reflected across their whole surface.
 
-[`GlTextureManager.LoadEnvMap()`](../src/SkyRender/Gl/GlTextureManager.cs) returns `(handle, isCube)`. If the file is a complete cubemap, `UploadCubemap` issues six `glTexImage2D` calls onto `GL_TEXTURE_CUBE_MAP_POSITIVE_X..NEGATIVE_Z` with `GL_CLAMP_TO_EDGE` on all three axes (necessary for cubemap seam continuity; `GL_REPEAT` would produce visible joins). If the file isn't a cubemap (mod-shipped panoramic 2D), we fall back to the legacy 2D path and the host sets `glMesh.IsEnvMap2D = true` so the shader takes the spherical-UV branch.
+**Lookup axes.** Vanilla cube maps are authored in the game's Z-up world: the +Z face is the sky, and the eye cube map (`textures\cubemaps\eyecubemap.dds`, 32x32 DXT1, almost black with a few window-shaped highlights) puts its highlights where the engine's reflection vectors land. The renderer works in Y-up after the NIF conversion `(x, y, z)_zup -> (x, z, -y)_yup` (scene hosts place references through the same conversion), so the reflection vector is turned back, `(x, y, z)_yup -> (x, -z, y)_zup`, before the cube-map lookup. Before 2026-10 the lookup used the Y-up vector directly: the sky face landed on a horizontal direction, metal reflected the wrong part of its map, and the eye highlights were rarely hit, which made eye reflections look absent.
 
-**Reflection vector coordinate space.** Computed in **world space** using `u_cameraPos` (per-frame, from `OrbitCamera.GetEyePosition()`) and `v_worldNormal` (vertex/geometry normal, not the per-pixel bumped normal). This matches Community Shaders' `Lighting.hlsl` envmap path — bumped reflections would require transforming the per-pixel `normal_viewSpace` back to world via `inverse(u_view)` and aren't part of the engine-faithful pipeline.
+**Reflection normal.** The per-pixel BUMPED normal, rotated back to world space (`normal_viewSpace` through the transpose of the view rotation). CS's `worldNormal` is the bumped normal too (`normalize(mul(tbn, normal.xyz))`). It is what gives env-mapped garments their per-facet sparkle; the macro geometry normal would make the whole surface mirror one smooth blob of the map.
 
-**Why the geometry normal, not the bumped one.** Cubemap reflections track macro shape; the eye is a sphere, the body is a body, regardless of fine surface detail in the normal map. Sampling the cubemap with the bumped normal would make per-texel reflections that the eye reads as noisy texture rather than reflective surface. CS, NifSkope, and Outfit Studio all use the geometry normal for envmap.
+**Debug switches** (const, off): `DEBUG_ENV_UNLIT` drops the irradiance factor, `DEBUG_ENV_YUP_LOOKUP` restores the old Y-up lookup, and `DEBUG_VIZ_ENV` outputs the stage-4 term alone, which tells a reflection that is present but too dim to see from one that is missing.
+
+**Scene environment.** Vanilla Skyrim's cube maps are static textures; the engine does not tint them by the sky or weather. The weather reaches a reflection only through the irradiance factor, which already carries the scene's sun and ambient (for example `SceneEnvironment.VanillaClearDay`). Dynamic, captured cube maps are a Community Shaders feature (`DYNAMIC_CUBEMAPS`), not vanilla, and are not modelled.
+
+**Cubemap loading.** Vanilla Skyrim envmaps in slot 4 are DDS cubemaps (`Caps2 & 0xFE00 == 0xFE00` → all six face flags set). The vanilla set (`textures\cubemaps\*.dds`) is 41 files, all DXT1 except `oil_e.dds` (DXT5), 32x32 or 128x128 with full mip chains, and all of them decode through Pfim. Pfim 0.11.4 reads only the first face of a multi-face DDS, so [`AssetCache.DecodeDdsCubemap`](../src/SkyRender/Assets/AssetCache.cs) parses the 124-byte DDS_HEADER itself, slices the payload into six equal face buffers (DDS spec stores faces in `+X, -X, +Y, -Y, +Z, -Z` order, sequentially after the header), and feeds each face through Pfim as a synthesized "single-face" DDS stream — same header with the cubemap bits cleared from `Caps2`, prefixed to that face's bytes. This decouples the cubemap-detection step from Pfim's lack of multi-face support without requiring a different DDS library. A DX10-header cube map (BC7, written by newer tools) has a 148-byte header, which this slicing does not handle yet: it falls through to the 2D path and reflects its first face only.
+
+[`GlTextureManager.LoadEnvMap()`](../src/SkyRender/Gl/GlTextureManager.cs) returns `(handle, isCube)`. If the file is a complete cubemap, `UploadCubemap` issues six `glTexImage2D` calls onto `GL_TEXTURE_CUBE_MAP_POSITIVE_X..NEGATIVE_Z` with `GL_CLAMP_TO_EDGE` on all three axes (necessary for cubemap seam continuity; `GL_REPEAT` would produce visible joins). DDS and GL use the same face orientation, so the faces upload without flips. If the file isn't a cubemap (mod-shipped panoramic 2D), we fall back to the legacy 2D path and the host sets `glMesh.IsEnvMap2D = true` so the shader takes the spherical-UV branch. Some vanilla NIFs point slot 4 at a 2D texture (the Ebony Mail's `textures\armor\ebonymail\*\chitin_e_ebony.dds` is a 32x256 DXT5 strip); those take the 2D fallback here, while the engine's cube sampler cannot use them.
 
 **Driver completeness.** Texture unit 6 is `samplerCube`; unit 10 is the 2D fallback `sampler2D`. `GlRenderer` always binds *something* to both units per draw call: a real cubemap or the 1×1 black `_defaultBlackCubemap` to unit 6, and either the 2D envmap or texture 0 to unit 10. This avoids "incomplete texture target" warnings on strict drivers when `has_environment_map` is false. `EnableCap.TextureCubeMapSeamless` is enabled at renderer init for consistent edge filtering across vendors.
 
@@ -1016,7 +1028,7 @@ Both reference applications ship shader source under `res/shaders/`. NifSkope sp
 | Rim light (SLSF2_Rim_Lighting) | rim·baseColor | rim·smoothstep(L·V) | code present but commented out |
 | Subsurface scattering | wrap + back-scatter, slot 2 mask | not applied | not applied |
 | Specular | Blinn-Phong, slot 7 mask | Blinn-Phong, normalMap.a or slot 7 | Blinn-Phong, normalMap.a or slot 7 |
-| Environment mapping | cubemap (slot 4), spherical-2D fallback | cubemap (slot 4) | cubemap (slot 4) |
+| Environment mapping | cubemap (slot 4) in game axes, slot-5 mask or glossiness, scaled by irradiance; spherical-2D fallback | cubemap (slot 4) | cubemap (slot 4) |
 | Eye catchlight | dedicated tight Blinn-Phong spot | not applied | not applied |
 | Shadows | PCF directional (key light) | not applied | not applied |
 | SSAO | screen-space, separate pass | not applied | not applied |
@@ -1414,7 +1426,7 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 4 | Greyscale_To_PaletteColor | ✓ | Lighting shader: switches the hair-tint code path to `baseColor.rrr * tint_color * scale`. Effect shader: colour = `baseColorScale × palette(source.g, baseColor.r × vertex.r)` from the greyscale texture ([Effect shaders](#effect-shaders-bseffectshaderproperty)). |
 | 5 | Greyscale_To_PaletteAlpha | ~ | Effect shader: ✓, alpha = `palette(source.a, alpha).a`. Lighting shader: ✗, it would mean a third palette branch in the hair-tint path; not seen on characters. |
 | 6 | Use_Falloff | ✓ | Effect shader only: opacity = `lerp(startOpacity, stopOpacity, smoothstep((abs(N·V) - startAngle) / (stopAngle - startAngle)))`, the angles stored as cosines. Per pixel here, per vertex in the engine. |
-| 7 | Environment_Mapping | ✓ | Enables slot 4 spherical env-map sampling. |
+| 7 | Environment_Mapping | ✓ | Enables the slot 4 cube-map reflection with the slot 5 mask ([Stage 4](#stage-4-environment-mapping)). |
 | 8 | Recieve_Shadows | ✗ | We unconditionally sample the shadow map in the lighting loop when `EnableShadows` is true. Honoring it per shape needs a uniform and a branch; characters always set it, but some scene objects (sky domes, distant meshes) clear it. |
 | 9 | Cast_Shadows | ✗ | We don't read this flag. The shadow pre-pass uses heuristic culls instead (`RenderShadowDepthPass` in [GlRenderer.cs](../src/SkyRender/Gl/GlRenderer.cs)): skip pure alpha-blend shapes (their shadow would be a soft amorphous blob), skip eyes (always self-shadowing). On characters the flag is always set and the heuristic gives cleaner shadows; in scenes, honoring a cleared flag is still to do. |
 | 10 | Facegen_Detail_Map | ✓ | Enables slot 3 overlay (detail map on faces). |
@@ -1424,7 +1436,7 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 14 | Landscape | ~ | Marks a landscape shape. SkyRender draws landscape from LAND data rather than from NIF shapes ([Part 6](#part-6--terrain-and-water)). |
 | 15 | Refraction | ✗ | Glass/water refraction effect. Needs a backbuffer copy + UV displacement stage. |
 | 16 | Fire_Refraction | ✗ | Same as Refraction, for fire effects. |
-| 17 | Eye_Environment_Mapping | ✓ | Enables slot 4 env-map for BSLSP_EYE shader type. |
+| 17 | Eye_Environment_Mapping | ✓ | Enables the slot 4 cube map for the BSLSP_EYE shader type, scaled by `eyeCubemapScale`. |
 | 18 | Hair_Soft_Lighting | ✓ | Enables hair backlight pass. |
 | 19 | Screendoor_Alpha_Fade | ✗ | Drives dithered alpha fadeout for LOD distance transitions. LOD and distance fade are not yet implemented. |
 | 20 | Localmap_Hide_Secret | — | Local-map UI flag — controls whether the shape appears on the in-game local map. No rendering implication. |
