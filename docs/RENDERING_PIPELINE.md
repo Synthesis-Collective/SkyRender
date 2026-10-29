@@ -1129,6 +1129,25 @@ The body colour is lit like any surface. The reflection is then mixed over the l
 - **Reflection colour.** With `ReflectsSky`, `GlRenderer.SkyColor` (default `ClearColor`): with water
   reflections on, the engine samples its reflection of the sky. Without it, the water type's
   reflection colour times its reflectivity, the engine's term when reflections are off.
+- **Sky gradient** (`GlRenderer.SkyGradient`, opt-in). With `ReflectsSky` and a gradient set, the
+  reflection is the gradient's colour at the elevation of the reflected view ray, per pixel
+  (`basic.frag` `skyGradientAt`): the keys are (elevation in degrees, colour), interpolated linearly
+  and held beyond the first and last; up to 16. The engine's water samples its sky reflection along
+  `reflect(view, normal)` (`Water.hlsl` `GetWaterSpecularColor`, the reflection cubemap); SkyRender
+  reflects off the flat surface (world up), so the elevation is the view ray's depression angle.
+  For a Skyrim exterior the sky is the engine's dome (`Sky.hlsl`, the vanilla sky shader's port):
+  per vertex of `meshes\sky\atmosphere.nif`, `VParams x (BlendColor0 x c.r + BlendColor1 x c.g +
+  BlendColor2 x c.b)` plus the image space's sky scale added after (`PParams.y`). The vertex colour
+  is a blend mask, measured on the vanilla mesh: red 1 at the rim up to 2 degrees, green peaking at
+  about 18 degrees, blue 1 at the zenith (0.94 at 59, 0.98 at 74). The three stops are the
+  weather's horizon, sky-lower and sky-upper colours (NAM0 slots 8, 7, 0; Community Shaders'
+  Effects11 names them gradient horizon / middle / top). A host builds the keys from those; the
+  renderer applies no colour of its own. Checked against the in-game Riverwood stills (SkyrimClear
+  noon): the bare dome is far darker and bluer than the game's sky (an image-space'd 81,175,233 at
+  17 degrees against the game's 131,208,255) and its river; the game's sky matches the dome seen
+  through the weather's far fog at its maximum, `(1 - max) x dome + max x fogFar`, plus the sky
+  scale (140,206,246 at 17 degrees). That fog over the sky is an in-game fit, not sourced (the
+  engine's `Atmosphere` object does hold a `BSFogProperty`); it is the host's to apply, in the keys.
 - **Fraction.** `lerp(1, fresnel, distanceFactor)`, with Schlick Fresnel (F0 = the water type's
   Fresnel) and `distanceFactor = saturate(lerp(w, 1, (d - 8192) / (noiseFalloff - 8192)))`, where d
   is the distance to the camera. For vanilla rivers (noise falloff about 4000) that is Fresnel

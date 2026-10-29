@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Sky gradient (`GlRenderer.SkyGradient`, `SkyGradient`, `SkyGradientKey`): a host-supplied sky
+  colour by elevation. Water that reflects the sky reflects the gradient at the elevation of the
+  reflected view ray, per pixel, instead of one sky colour, as the engine's water samples its sky
+  reflection along the reflected ray. Null by default (unchanged output); characters are unaffected.
 - Projected materials (`GlMesh.HasProjectedMaterial`, `GlMesh.ProjectedParamsFor`): the engine's
   single-pass `Projected_UV` path, covering a shape per pixel against its normal-mapped normal with
   a tiling noise, so snow on rock follows the rock's relief instead of smearing across faces. Off

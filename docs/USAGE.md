@@ -267,6 +267,13 @@ var water = GlWorldFactory.CreateWater(
     new TerrainHeightField(new[] { cell }), textures);
 renderer.AddMesh(water);
 
+// Optional sky by elevation for what sky-reflecting water reflects, per pixel (for a Skyrim
+// exterior: the weather's horizon / sky-lower / sky-upper colours mixed by the sky dome's masks).
+renderer.SkyGradient = new SkyGradient(new[]
+{
+    new SkyGradientKey(0f, horizonRgb), new SkyGradientKey(18f, skyLowerRgb), new SkyGradientKey(90f, skyUpperRgb),
+});
+
 // Optional distance fog over every lit surface (for an exterior, the weather's fog).
 renderer.Fog = new DistanceFog(fogNearRgb, fogFarRgb, near, far, power, max);
 
