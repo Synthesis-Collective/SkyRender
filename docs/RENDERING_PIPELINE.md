@@ -37,9 +37,10 @@ A reference for how SkyRender parses NIF meshes and renders them, with side-by-s
    - [Overlays in offscreen renders](#overlays-in-offscreen-renders)
 5. [Part 4 — Comparison with NifSkope and Outfit Studio](#part-4--comparison-with-nifskope-and-outfit-studio)
 6. [Part 5 — GL context ownership](#part-5--gl-context-ownership)
-7. [Appendix A — Shader flag inventory table](#appendix-a--shader-flag-inventory-table)
-8. [Appendix B — BSLightingShaderProperty field inventory](#appendix-b--bslightingshaderproperty-field-inventory)
-9. [Appendix C — Texture slot inventory](#appendix-c--texture-slot-inventory)
+7. [Part 6 — Terrain and water](#part-6--terrain-and-water)
+8. [Appendix A — Shader flag inventory table](#appendix-a--shader-flag-inventory-table)
+9. [Appendix B — BSLightingShaderProperty field inventory](#appendix-b--bslightingshaderproperty-field-inventory)
+10. [Appendix C — Texture slot inventory](#appendix-c--texture-slot-inventory)
 
 ---
 
@@ -378,7 +379,7 @@ What [Appendix A](#appendix-a--shader-flag-inventory-table) catalogs by bit. Sum
 - **Flags not yet implemented**: the features exist in the engine and appear in real content, but SkyRender has no code path for them yet.
 - **Flags with no rendering effect** for a viewer: local-map and other UI flags, packing hints, reserved bits.
 
-The "not yet implemented" bucket is large. SkyRender was first built for characters and has since grown into cell rendering, so the remaining gaps are mostly the engine paths scenes use: landscape (multi-layer terrain blending), water and refraction, parallax and multi-layer parallax, glow maps, decals, snow and LOD fade. Hosts that render cells today work around some of these themselves (a cell host can build terrain layers and a water plane as its own meshes), and effect-shader shapes (`BSEffectShaderProperty`: fire, smoke, light cones) are detected and reported (`BuiltMesh.HasEffectShader`, with their base colour) but not shaded, so hosts skip them. Built-in support for these is planned work. See Appendix A for the per-flag notes.
+The "not yet implemented" bucket is large. SkyRender was first built for characters and has since grown into cell rendering, so the remaining gaps are mostly the engine paths scenes use: refraction, parallax and multi-layer parallax, glow maps, decals, snow and LOD fade. Landscape and water are drawn natively from host-supplied data ([Part 6](#part-6--terrain-and-water)). Effect-shader shapes (`BSEffectShaderProperty`: fire, smoke, light cones) are detected and reported (`BuiltMesh.HasEffectShader`, with their base colour) but not shaded, so hosts skip them. Built-in support for these is planned work. See Appendix A for the per-flag notes.
 
 ### Override channels
 
@@ -905,6 +906,99 @@ A host that issues GL calls from anywhere else (an immediate re-upload, or teard
 
 ---
 
+## Part 6 — Terrain and water
+
+Landscape and water are not NIF content: they come from LAND, LTEX/TXST and WATR records, which
+SkyRender does not read. A host reads them and hands over plain data in the `SkyRender.World`
+namespace; SkyRender builds and draws it. Code: [World/](../src/SkyRender/World/).
+
+```
+host reads LAND / LTEX / TXST / WATR
+      │
+      ▼
+TerrainCell (heights, VNML normals, VCLR colours, 4 quadrants: base + alpha layers)
+WaterSurface (height, footprint, WaterMaterial)
+      │
+      ▼
+[World/WorldMeshBuilder.cs] BuildTerrainQuadrant / BuildWater   (GL-free, testable)
+      │
+      ▼
+[World/GlWorldFactory.cs] Upload* + Apply*Material -> ordinary GlMesh objects
+      │
+      ▼
+GlRenderer: the same passes as every mesh (opaque, shadow, SSAO prepass, wireframe, clip)
+```
+
+### Terrain data
+
+- **Grid.** A cell is 4096 units with a 33x33 vertex grid (128 apart); vertex 32 of one cell is vertex 0
+  of its neighbour. Arrays are x-fastest (`y * 33 + x`). Positions are Skyrim Z-up, converted to the
+  renderer's Y-up with `(x, z, -y)`, the same mapping as NIF geometry.
+- **Heights.** `LandHeightDecoder.Decode(offset, gradients)` decodes VHGT: column 0 accumulates down
+  the rows from the offset, each row then along x, 8 units per step.
+- **Normals and colours.** `TerrainCell.DecodeNormals` reads VNML as three **signed** bytes per vertex
+  (OpenMW's ESM4 loader reads them as `int8`); `DecodeColors` reads VCLR as unsigned RGB. Without
+  normals each triangle is shaded with its face normal; without colours, white.
+- **Layers.** Each quadrant has a base texture and up to 8 alpha layers in record order, each with a
+  17x17 opacity grid (VTXT positions 0..288, row by row from the bottom-left).
+- **Water depth.** `TerrainHeightField.HeightAt` interpolates on the drawn triangles (each square
+  splits along its (x,y)-(x+1,y+1) diagonal), so the water's depth tint follows the ground that is
+  actually drawn.
+
+### Terrain shading
+
+One mesh per quadrant, three vertices per triangle, with the layer weights in a second vertex buffer
+(attribute locations 6-7, two vec4). `basic.frag`'s stage 1 has a terrain branch (`u_isTerrain`) that
+blends the layers before everything else, so lighting, shadows, SSAO and post-processing run once on
+the result, exactly as for any mesh.
+
+- **Blend (`TerrainBlendMode`).** `Over`, the default: each layer over the result so far, weighted by
+  its opacity. It was chosen by comparing against in-game screenshots (Riverwood, vanilla load order,
+  free camera at matched poses). It reproduced the game's layer pattern, while a normalised sum and
+  the texture-alpha-weighted chain both washed the layers out. `OverWithTextureAlpha` (what separately
+  drawn alpha-blended layer sheets produce) and `NormalizedSum` remain for comparison. Community
+  Shaders' landscape shader confirms the per-layer arithmetic (`weight × sample`, the texture alpha
+  is not a weight). The CPU-side derivation of the engine's per-vertex weights from VTXT opacity is
+  not in any shader source; `Over` is the empirical match.
+- **Tiling.** `TerrainBuildOptions.TextureRepeat` defaults to 2048 / 12 world units per repeat
+  (12 per quadrant), matched against an in-game close-up. The opacity-defined patch outlines
+  already matched at that framing, so only the texture-scale detail had to be fitted. This is
+  empirical, not a documented engine constant.
+- **Normal maps.** The base's normal map is the ordinary `texture_normal`. Each layer's normal map is
+  on units 14-21 and blended with the same weights as the albedo; a layer without one contributes a
+  flat normal. GL 3.3 guarantees only 16 texture units, so the renderer reads
+  `GL_MAX_TEXTURE_IMAGE_UNITS` at start-up and enables as many layer normal maps as fit; most GPUs
+  report 32.
+- **Vertex colours.** Divided by their brightest channel in the shader before the multiply (as the
+  engine does), so VCLR tints without darkening.
+- **Texture units.** The 8 layer diffuses reuse the 2D units of samplers a terrain draw never reads
+  (skin, specular, face tint, detail, env mask, 2D env, glow) plus unit 13. Two `sampler2D` uniforms
+  may share a unit.
+- **Missing textures.** A quadrant whose base doesn't resolve draws on the white texture; a layer whose
+  texture doesn't resolve is left out (a white layer would be worse than none).
+
+### Water
+
+`WorldMeshBuilder.BuildWater` builds a grid (`WaterMaterial.GridResolution`, default 48 squares per
+side). Per vertex it stores the body colour, the shallow colour lerped to the deep colour by the
+depth to the ground over `ShallowBand` (no ground counts as deep), and the shore-alpha ramp. The
+sky reflection is added in `basic.vert` (`u_isWater`) from the **live** camera: Schlick Fresnel
+with F0 = the water type's Fresnel, scaled by reflectivity x 4, mixing toward
+`GlRenderer.SkyColor` (default `ClearColor`) times the water type's reflection colour. The first noise
+texture is bound as the wave normal map. Water is opaque by default, as the engine draws it.
+
+Not modelled: reflection and refraction buffers, flow maps, the second and third noise layers.
+
+### Trees (`SLSF2_Tree_Anim`)
+
+On tree shapes the vertex colour's alpha is the wind-sway weight: the engine's vertex shader scales the
+sway by it, and it is not opacity. `NifMaterialBinder` sets `GlMesh.VertexAlphaIsWindWeight` from the
+flag, and `basic.frag` then keeps the vertex RGB but leaves the alpha to the texture. Before this,
+the alpha test removed most leaf cards and trees drew as bare trunks. Hosts that build meshes
+without `NifMaterialBinder` should set the property themselves.
+
+---
+
 ## Appendix A — Shader flag inventory table
 
 Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/niftools/nifskope/blob/develop/src/gl/glproperty.h#L450).
@@ -933,7 +1027,7 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 11 | Parallax | ✗ | We don't sample slot 3 as a height map for view-dependent UV displacement. Needs a per-pixel raymarch in the fragment shader. Rare on characters; common on architecture, dungeon walls and some armor. |
 | 12 | Model_Space_Normals | ✓ | Selects MSN normal-map path *and* FaceTint blend mode (overlay vs multiply). |
 | 13 | Non_Projective_Shadows | ✗ | Specialty flag for shapes that should produce undistorted shadows (stairs and similar). |
-| 14 | Landscape | ✗ | Marks a landscape shape, which the engine draws with its own multi-layer terrain shader. Not yet built in; a cell host can build terrain layers as its own meshes today. |
+| 14 | Landscape | ~ | Marks a landscape shape. SkyRender draws landscape from LAND data rather than from NIF shapes ([Part 6](#part-6--terrain-and-water)). |
 | 15 | Refraction | ✗ | Glass/water refraction effect. Needs a backbuffer copy + UV displacement stage. |
 | 16 | Fire_Refraction | ✗ | Same as Refraction, for fire effects. |
 | 17 | Eye_Environment_Mapping | ✓ | Enables slot 4 env-map for BSLSP_EYE shader type. |
@@ -985,7 +1079,7 @@ Bit layout per [NifSkope `glproperty.h` lines 450–517](https://github.com/nift
 | 26 | Rim_Lighting | ✓ | Enables skin rim pass. |
 | 27 | Back_Lighting | ✗ | Per-pixel back-lighting using a backlight texture. We have a hair-soft-lighting term but no separate skin back-lighting path. Visible on thin-skinned regions (ears, finger webs) and on foliage lit from behind; under the default lighting these don't get strong back-light, so the absence isn't striking. Adding it would mean reading slot 7 as a backlight texture (currently used for spec masks) under a different shader-flag check. |
 | 28 | Unused02 | — | Reserved. |
-| 29 | Tree_Anim | ✗ | Tree vertex animation. Scenes are static, so this matters only once animation exists. |
+| 29 | Tree_Anim | ~ | Tree wind animation. Scenes are static, so no sway is drawn, but the flag is honoured for what it changes: the vertex alpha is the sway weight, not opacity ([Part 6](#trees-slsf2_tree_anim)). |
 | 30 | Effect_Lighting | — | `BSEffectShaderProperty`-specific. Effect shaders are not yet shaded. |
 | 31 | HD_LOD_Objects | ✗ | HD LOD object variant. |
 

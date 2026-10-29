@@ -10,8 +10,9 @@ version of sections 2-3 is the sample app in [`samples/SkyRender.Demo`](../sampl
 - [5. Render an NPC portrait](#5-render-an-npc-portrait)
 - [6. The interactive character viewer](#6-the-interactive-character-viewer)
 - [7. Extending a scene](#7-extending-a-scene)
-- [8. Configuration](#8-configuration)
-- [9. Threading and requirements](#9-threading-and-requirements)
+- [8. Terrain and water](#8-terrain-and-water)
+- [9. Configuration](#9-configuration)
+- [10. Threading and requirements](#10-threading-and-requirements)
 
 ## 1. Install
 
@@ -227,7 +228,44 @@ Forward mouse input to `viewer.Camera` as in section 3. The two WPF panels
 - **Hiding meshes.** `GlMesh.IsHiddenByHost` hides a mesh without disturbing the renderer's own
   missing-texture handling.
 
-## 8. Configuration
+## 8. Terrain and water
+
+SkyRender draws landscape and water from plain data your host reads out of the LAND, LTEX/TXST and
+WATR records (`SkyRender.World`; Skyrim Z-up world units). Build on the GL thread:
+
+```csharp
+using SkyRender.World;
+
+// One LAND record: decoded heights, optional normals / colours, and each quadrant's textures.
+var cell = new TerrainCell(gridX, gridY, LandHeightDecoder.Decode(vhgtOffset, vhgtGradients))
+{
+    Normals = TerrainCell.DecodeNormals(vnmlBytes),   // optional (signed bytes)
+    Colors  = TerrainCell.DecodeColors(vclrBytes),    // optional
+};
+cell.Quadrants[(int)TerrainQuadrantIndex.BottomLeft] = new TerrainQuadrant
+{
+    Base = new TerrainTexture(@"textures\landscape\dirt02.dds", @"textures\landscape\dirt02_n.dds"),
+    Layers = new[] { new TerrainLayer(new TerrainTexture(@"textures\landscapeieldgrass02.dds"), opacity17x17) },
+};
+
+var terrain = GlWorldFactory.CreateTerrain(cell, textures);   // four GlMesh, one per quadrant
+terrain.AddTo(renderer);
+
+var water = GlWorldFactory.CreateWater(
+    new WaterSurface(waterHeight, x0, y0, x1, y1,
+        new WaterMaterial(shallowRgb, deepRgb, reflectionRgb, reflectivity, fresnel)
+        { NoiseTexturePath = @"textures\water\..." }),
+    new TerrainHeightField(new[] { cell }), textures);
+renderer.AddMesh(water);
+```
+
+Defaults match the game (blend and tiling were checked against in-game screenshots); see
+`TerrainBuildOptions` and [RENDERING_PIPELINE.md, Part 6](RENDERING_PIPELINE.md#part-6--terrain-and-water).
+A host that keeps its own mesh cache can build the data off-thread with `WorldMeshBuilder` and use
+`GlWorldFactory.UploadTerrain` / `ApplyTerrainMaterial` (and the water equivalents) on meshes it owns.
+Dispose a `GlTerrainCell` and the water mesh on the GL thread.
+
+## 9. Configuration
 
 | Setting | Where |
 |---|---|
@@ -238,7 +276,7 @@ Forward mouse input to `viewer.Camera` as in section 3. The two WPF panels
 | Texture upload diagnostics | environment variable `SKYRENDER_DDS_DIAGNOSTICS=1` |
 | Shader hot-editing | edit the `Shaders\*.vert/.frag` copied beside the assembly; they take precedence over the embedded copies |
 
-## 9. Threading and requirements
+## 10. Threading and requirements
 
 - Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
 - `SkyRender` targets `net8.0`; `SkyRender.Character` targets `net8.0-windows10.0.19041.0`
