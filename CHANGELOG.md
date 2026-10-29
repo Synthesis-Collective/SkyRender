@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Grass is lit by the sun's plain colour. The engine's grass setup passes the sun light's diffuse
+  colour as it is, where the lighting shader multiplies it by the image space's sunlight scale (2.8
+  under the vanilla clear day), so grass now takes the key light's colour without its intensity and
+  without the daylight boost, and no fill or rim light (its constants carry one directional light).
+  Against clear-noon game captures (linear light on a grass patch, allowing for each frame's overall
+  exposure gap) grass drops from 2.2 / 1.7 times the game's level to 1.4 / 1.3; the rest is open. New disabled shader diagnostics:
+  `DEBUG_GRASS_SCALED_SUN` (the previous lighting) and `DEBUG_LINEAR_FRAME` (linear output instead of
+  the image-space finish). Meshes without `IsGrass` are unchanged.
 - Near-field grass (`SkyRender.World`). `TerrainTexture.Grasses` carries a landscape texture's grass
   list (LTEX GNAM, as `GrassType`: the GRAS fields); `GrassPlacer.Place(cells, GrassSettings,
   waterHeight, camera)` grows it GL-free, by the engine's rules (patches of 2 × 2 grid squares, a

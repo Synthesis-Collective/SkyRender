@@ -1475,6 +1475,20 @@ Nukem9's skyrimse-test `RunGrass.hlsl` and `BSGrassShader.cpp`, and Community Sh
   rotated mesh normal (the VertexL technique; its decompile is not published, so this is a model). The
   grass techniques are directional-only: no point lights, no specular. The engine also lerps the
   shadow towards 1 by `fShadowClampValue`; not applied here.
+- The sun is its plain colour. `BSGrassShader::SetupGeometry` fills the grass constants straight from
+  the sun light: `DirLightColor = diffuse`, `DirLightDirection = −worldDirection`, `AmbientColor =`
+  the light's ambient colour. The lighting shader's `GeometrySetupConstantDirectionalLight` instead
+  uploads `diffuse × dimmer × ImageSpaceManager+0xE0`; that offset is the current image space's HDR
+  sunlight scale (CommonLibSSE-NG: `ImageSpaceManager::data` at 0xC8, `ImageSpaceBaseData::HDR`
+  `sunlightScale` at 0x18; Community Shaders' `State.cpp` scales its shared sun the same way, by
+  `hdr.sunlightScale` and the light's fade). So grass gets the sun without the 2.8 that every other
+  surface gets under ISSkyrimClearDAY. The key light's intensity is that scale
+  (`SceneEnvironment.SunIntensity`), so grass takes `lights[1].color` alone, without the daylight
+  boost, and none of the other directional slots (the constants carry one light). The grass ambient
+  is the sun light's ambient colour; what the engine stores there is not documented, so grass keeps
+  the scene ambient (the DALC Z− colour; the weather's NAM0 Ambient would be about 6% dimmer).
+  `DEBUG_GRASS_SCALED_SUN` in `basic.frag` (off) restores the scaled sun, the boost and the other
+  slots.
 - Alpha: `textureAlpha × (1 − saturate((distance − fGrassStartFadeDistance) / fGrassFadeRange))`,
   alpha-tested against the model's threshold (grass draws in the alpha-test pass, depth-written).
   Defaults 7000 (the launcher's highest setting, the lab profile's value) and 1000.
@@ -1485,15 +1499,27 @@ Nukem9's skyrimse-test `RunGrass.hlsl` and `BSGrassShader.cpp`, and Community Sh
 Characters never carry `IsGrass`, and `u_grass` is false for every other mesh, so character output is
 unchanged.
 
-**Checked against the game** (lab, SkyrimClear noon, grass on; a low meadow view and a close-up
+**Checked against the game** (lab, SkyrimClear noon, grass on; a low meadow view L and a close-up C
 looking down over Riverwood): the grass grows where the game has it (meadow, not the rocky path or
-the road), at a similar height and spread. It draws far too bright, though: the mean colour of a
-foreground grass patch is (123, 131, 70) here against (46, 53, 26) in the game, and (193, 199, 107)
-against (83, 91, 60) from above, so the bright grass saturates to yellow. With the sun term
-dropped (`DEBUG_GRASS_AMBIENT_ONLY` in `basic.frag`, off) it reads (62, 75, 43) and (109, 123, 68),
-much nearer. The decompiled FlatL technique does light grass with `saturate(dot(DirLightDirection,
-instanceUp))`; what sun colour and direction the engine passes in, and whether the sun's HDR scale
-is part of it, is not settled by a source. So the sourced shading stays and the gap stays open.
+the road), at a similar height and spread. Brightness, measured as linear luminance (the game's
+frame taken back through the clear-day image space; ours from `DEBUG_LINEAR_FRAME`) over a
+foreground grass patch, divided by the same ratio on nearby rock or gravel (the frames differ by
+about 1.3 overall there, an exposure and shadow gap outside grass):
+
+| Grass lighting                                         | L     | C     |
+|--------------------------------------------------------|-------|-------|
+| sun × 2.8 (sunlight scale) × daylight boost, plus rim  | 2.18  | 1.67  |
+| sun's plain colour, one directional light (sourced)    | 1.41  | 1.26  |
+| ambient only (`DEBUG_GRASS_AMBIENT_ONLY`)              | 1.05  | 1.03  |
+
+Per pixel, the fix halves the light on a blade (median linear luminance 0.80 → 0.43 in both views).
+The rest of the gap is not settled. The game's blades read about as bright over sunlit ground as in
+shade, so the game's grass may sit in more shadow than ours (its trees cast wider shadows than
+SkyRender's, and the low view looks shadowed in the game where ours is sunlit), or receive less sun
+than its constants suggest. Ambient only matches both views, but the decompiled setup gives grass the sun
+along `−worldDirection`, the same convention as every lit surface, so that reading is not adopted.
+A capture of the same views with `bShadowsOnGrass=0` (grass then reads an all-white shadow mask)
+would separate the two.
 
 ### Trees (`SLSF2_Tree_Anim`)
 
