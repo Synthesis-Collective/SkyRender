@@ -44,16 +44,48 @@ Offscreen rendering, NPC portraits and the interactive character viewer are cove
 
 ## Demo
 
-[`samples/SkyRender.Demo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.Demo)
-is a minimal WPF app: choose **Open NIF…**, and it renders the mesh with its textures (resolved from
-the game's Data folder and archives), framed automatically. Drag to orbit, middle-drag to pan, use
-the wheel to zoom.
+Two sample apps show the library at work:
+
+- [`samples/SkyRender.Demo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.Demo) is a minimal WPF viewer: choose **Open NIF…**,
+  and it renders the mesh with its textures (resolved from the game's Data folder and archives),
+  framed automatically. Drag to orbit, middle-drag to pan, use the wheel to zoom.
+- [`samples/SkyRender.CellDemo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.CellDemo) draws a whole interior or exterior cell of
+  the installed game: terrain, water, grass, statics, effects, weather or cell lighting, and
+  optionally distant LOD.
 
 ```bash
 dotnet run --project samples/SkyRender.Demo
+dotnet run --project samples/SkyRender.CellDemo -c Release
 ```
 
-[`samples/SkyRender.CellDemo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.CellDemo) draws a whole interior or exterior cell of the installed game.
+The comparisons below put a SkyRender frame beside the game's own screenshot from the same camera
+position, drawn from the base game's data. The screenshots are of The Elder Scrolls V: Skyrim Special
+Edition, a game by Bethesda Game Studios, captured for illustration. Exteriors are under the
+vanilla clear weather at noon.
+
+Riverwood from the air: terrain with its painted layers, the river, buildings and trees of the
+cells in view.
+
+![SkyRender and the game, Riverwood from above](https://raw.githubusercontent.com/Synthesis-Collective/SkyRender/main/docs/images/riverwood_aerial.jpg)
+
+The view north from above Riverwood, with distant terrain, object and tree LOD beyond the loaded
+cells.
+
+![SkyRender and the game, the view north with distant LOD](https://raw.githubusercontent.com/Synthesis-Collective/SkyRender/main/docs/images/view_north_lod.jpg)
+
+A meadow near Riverwood at eye level, with grass placed by the engine's rules (the exact tufts
+differ: the game's placement is not repeatable).
+
+![SkyRender and the game, grass in a meadow](https://raw.githubusercontent.com/Synthesis-Collective/SkyRender/main/docs/images/meadow_grass.jpg)
+
+The Bannered Mare's kitchen hearth: the cell's own lighting, its placed lights with
+shadows, and the fire's effect-shader flames turned toward the camera.
+
+![SkyRender and the game, the Bannered Mare kitchen hearth](https://raw.githubusercontent.com/Synthesis-Collective/SkyRender/main/docs/images/bannered_mare_kitchen.jpg)
+
+Known differences: grass is still brighter than the game's; particles (sparks, smoke, the hearth's
+moving flames) and NPCs are not drawn; the game's distance haze is thicker; no bloom or eye
+adaptation; and clouds are not drawn. RENDERING_PIPELINE.md records each comparison.
 
 ## Platform
 
