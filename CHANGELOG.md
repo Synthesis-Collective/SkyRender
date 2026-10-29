@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Distant LOD: LOD water and LOD vertex colours. `LodKind.Water` / `LodKinds.Water` (now part of
+  `LodKinds.All`): the flat quads under each terrain LOD block's `WATER` node, read in the same pass
+  as the terrain (`LodNifReader.Read(path, includeWater)`, `LodShape.IsWater`), placed at the block at
+  each quad's own height and cut under loaded cells by segment like level-4 object LOD
+  (`LodMeshBuilder.BuildWater`). `GlWorldFactory.CreateDistantLod` takes an optional `WaterMaterial`
+  (the worldspace's LOD water type, WRLD NAM3) and draws them as the engine's LOD water technique
+  (`ApplyLodWaterMaterial`, `UploadLodWater`; `u_lodKind` 4): opaque, no depth or refraction, the
+  body `lerp(shallow, deep, fresnel)`, the sky reflection by `lerp(1, fresnel, distanceFactor)` per
+  pixel, the sun specular, fog. Without a material the water parts are not drawn. Object LOD now
+  honours `SLSF2_Vertex_Colors` (`LodShape.Colors`, `LodMeshPart.HasVertexColors`): the colour
+  multiplies the diffuse and its alpha is ignored on LOD-object shapes, as the engine does; vanilla's
+  HD mountain LOD (objHD / objsnowHD) carries such colours and draws darker than before, and
+  DynDOLOD's object and grass LOD take them too. Meshes without `DistantLod` are unchanged.
 - Distant LOD (`SkyRender.World`): `DistantLodLoader.Load(DistantLodRequest, resolveDiskPath)` reads
   a worldspace's `lodsettings` file, picks the terrain (`.btr`), object (`.bto`) and tree (`.btt`)
   blocks the engine would draw around a camera (`LodSelector`: a quadtree on the `[TerrainManager]`

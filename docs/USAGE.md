@@ -321,7 +321,7 @@ sourceTexture, hasSourceTexture, greyscaleTexture)` instead. The shading is stat
 controllers and particle systems are not drawn. See
 [RENDERING_PIPELINE.md, Effect shaders](RENDERING_PIPELINE.md#effect-shaders-bseffectshaderproperty).
 
-**Distant LOD.** A worldspace's terrain, object and tree LOD, drawn beyond the cells you load:
+**Distant LOD.** A worldspace's terrain, object, tree and water LOD, drawn beyond the cells you load:
 
 ```csharp
 using SkyRender.World;
@@ -334,20 +334,30 @@ var lod = DistantLodLoader.Load(new DistantLodRequest
     Eye = cameraPosition,                            // Skyrim world units, Z up
     LoadedCells = new LoadedCells(loadedCellXYs),    // the cells you draw at full detail
     MaxDistance = 409600f,                           // your far plane; push it out for LOD
-    // Kinds = LodKinds.Terrain | LodKinds.Objects,  // default: all three
+    // Kinds = LodKinds.Terrain | LodKinds.Objects,  // default: all four (terrain, objects, trees, water)
     // Distances = new LodDistances { ... },         // [TerrainManager] values; defaults are the prefs'
 }, assets.ResolveAssetPath);                         // game-relative path -> file on disk, or null
 
-// On the GL thread.
-var glLod = GlWorldFactory.CreateDistantLod(lod, textures);
+// On the GL thread. LOD water needs the worldspace's LOD water type (WRLD NAM3) as a WaterMaterial,
+// built like a cell's water from its WATR; without one the water parts are skipped.
+var lodWater = new WaterMaterial(shallow, deep, reflection, reflectivity, fresnel)
+{
+    NoiseTexturePath = noiseLayerOne, NoiseUvScale = noiseUvScale, ReflectsSky = true,
+    NoiseFalloff = noiseFalloff, SunSpecularPower = sunPower, SunSpecularMagnitude = sunMagnitude,
+};
+var glLod = GlWorldFactory.CreateDistantLod(lod, textures, lodWater);
 glLod.AddTo(renderer);
 // lod.BlocksSelected / BlocksFound / Parts / Errors say what went in.
 ```
 
 Terrain LOD draws its block's diffuse and model-space normal texture with the engine's LOD noise
-term; object LOD its atlas; tree LOD crossed planes from the tree atlas. Under the loaded cells the
-terrain is lowered and covered triangles dropped, as the engine does, and the objects and trees of
-those cells are left out. Reload when the camera moves to another cell. Dispose `GlDistantLod` on
+term; object LOD its atlas (times its vertex colours, where the shape has them); tree LOD crossed
+planes from the tree atlas; LOD water the terrain blocks' water quads, at their own heights, as the
+engine's LOD water technique (sky reflection, sun specular, fog; no depth or refraction). Under the
+loaded cells the terrain is lowered and covered triangles dropped, as the engine does, and the
+objects, trees and LOD water of those cells are left out (draw the cells' own water). Grass LOD is
+not a kind of its own: where a LOD generator bakes it (DynDOLOD, from a grass cache), it is part of
+the object LOD files and draws with them; vanilla Skyrim has none. Reload when the camera moves to another cell. Dispose `GlDistantLod` on
 the GL thread. See [RENDERING_PIPELINE.md, Distant LOD](RENDERING_PIPELINE.md#distant-lod).
 
 ## 9. Configuration

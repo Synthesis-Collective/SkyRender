@@ -1406,8 +1406,8 @@ without `NifMaterialBinder` should set the property themselves.
 
 ### Distant LOD
 
-`SkyRender.World` draws a worldspace's distant LOD, terrain (`.btr`), objects (`.bto`) and trees
-(`.btt`), around a camera and outside the cells a host draws at full detail. A host calls
+`SkyRender.World` draws a worldspace's distant LOD, terrain (`.btr`), objects (`.bto`), trees
+(`.btt`) and LOD water (the `.btr` files' water quads), around a camera and outside the cells a host draws at full detail. A host calls
 `DistantLodLoader.Load(DistantLodRequest, resolveDiskPath)` with the worldspace name, the camera
 and the loaded cells, then `GlWorldFactory.CreateDistantLod` on the GL thread. The loader is GL-free
 (reading, selection and geometry can run off the render thread) and finds files through the host's
@@ -1418,7 +1418,7 @@ resolver (game-relative path to a file on disk, e.g. `GameAssetResolver.ResolveA
 | File | Contents |
 |---|---|
 | `lodsettings\<w>.lod` | 16 bytes: south-west cell (2 × int16), stride in cells (int32), lowest and highest level (int32). Vanilla Tamriel: (-96, -96), 256, 4..32. |
-| `meshes\terrain\<w>\<w>.L.X.Y.btr` | Terrain LOD block: a NIF whose `land` BSTriShape covers L × L cells from cell (X, Y). Shader type 18 (LOD landscape noise), `SLSF1_Model_Space_Normals`, `SLSF2_LOD_Landscape`; textures `textures\terrain\<w>\<w>.L.X.Y.dds` and `_n.dds`. A second node, `WATER`, holds flat LOD water quads with no shader; they are not drawn. |
+| `meshes\terrain\<w>\<w>.L.X.Y.btr` | Terrain LOD block: a NIF whose `land` BSTriShape covers L × L cells from cell (X, Y). Shader type 18 (LOD landscape noise), `SLSF1_Model_Space_Normals`, `SLSF2_LOD_Landscape`; textures `textures\terrain\<w>\<w>.L.X.Y.dds` and `_n.dds`. A second node, `WATER`, holds the LOD water: flat quads with no shader property (below). |
 | `meshes\terrain\<w>\objects\<w>.L.X.Y.bto` | Object LOD block: BSSubIndexTriShapes (`obj`, `obj-LargeRef`, `objsnow`) on the atlas `textures\terrain\<w>\objects\<w>.objects.dds` with a tangent-space `_n`. Levels 4, 8 and 16 only. |
 | `meshes\terrain\<w>\trees\<w>.lst` | Tree types: int32 count, then 32 bytes each: index, width, height, atlas UV min x/y, UV max x/y, unknown. |
 | `meshes\terrain\<w>\trees\<w>.4.X.Y.btt` | Tree instances of a level-4 block: int32 type count; per type its list index, an instance count, and 32 bytes per instance: world x, y, z, rotation about Z, scale, reference FormID, two unknown. |
@@ -1459,6 +1459,11 @@ metric the engine measures is not, so this one is a model.
   transposed mapping. Levels 8 and 16 have one segment; there a triangle is dropped when its centre
   is in a loaded cell.
 - Trees: an instance standing in a loaded cell is dropped.
+- Water: level-4 LOD water is a BSSubIndexTriShape with 16 segments, and segment k is the block's cell
+  (k / 4, k % 4), as for object LOD (every triangle of all 1444 vanilla level-4 water shapes lies in
+  the cell its segment names). The loaded cells' segments are dropped; those cells draw their own
+  water. Levels 8 to 32 are plain BSTriShapes; there a triangle is dropped when its centre is in a
+  loaded cell.
 
 **Shading** (`GlMesh.DistantLod`, `u_lodKind` in `basic.frag`). LOD meshes take the ordinary lit path
 (sun, ambient, shadows, distance fog, image space), with the engine's LOD terms:
@@ -1469,13 +1474,64 @@ metric the engine measures is not, so this one is a model.
   weighted by texel brightness (`GetLodLandBlendParameter` / `GetLodLandBlendMultiplier`). Which file
   the engine binds there is not documented; that is the one terrain noise texture the base game ships.
 - Objects: the atlas and its normal map like any static (`SLSF2_LOD_Objects` shapes carry no
-  specular flag, so no specular).
+  specular flag, so no specular). A shape with `SLSF2_Vertex_Colors` multiplies the diffuse by its
+  vertex colour (`Lighting.hlsl`: `color.xyz *= vertexColor`); the vertex alpha is not applied to
+  LOD objects (`Lighting.hlsl` skips `alpha *= input.Color.w` for `LODOBJECTS` and `LODOBJECTSHD`),
+  so it is written as 1 on shapes with `SLSF2_LOD_Objects` or `SLSF2_HD_LOD_Objects`. In vanilla
+  Tamriel the HD shapes (`objHD`, `objsnowHD`, the mountains: 612 of 1743 shapes) carry colours
+  (mean 0.68), so they draw that much darker than their full-detail texture.
 - Trees (Community Shaders `DistantTree.hlsl`): two double-sided planes crossing at 90°, standing
   on the instance, turned about Z by its rotation, width × scale by height × scale (xEdit's width
   and height are the tree's object bounds), the type's atlas rectangle, alpha-tested at 128/255
   (the threshold xEdit prepares the atlas against). The engine lights them with half the sun and no
   N·L term plus the ambient; `basic.frag` does the same for `u_lodKind == 3`. (The DynDOLOD manual
   describes these crossed planes; they are not camera-facing billboards.)
+
+**LOD water.** The quads under a terrain block's `WATER` node (vanilla Tamriel: 1444 shapes in 1375 of
+2304 level-4 blocks, one per level-8 to 32 block that has water) are flat, one quad per cell (merged
+at higher levels), local to the block's south-west corner like the terrain. Sources and readings:
+
+- **Height.** Per quad, in the mesh: the generator writes each cell's water height, the cell's own
+  (XCLW) else the worldspace default (DynDOLOD's Terrain LOD and Water LOD notes: "uses the water
+  height found on the CELL record and default water height found on the WRLD record as fallback").
+  Vanilla quads span -14000 (the sea, the WRLD DNAM default) to about 13000 (mountain lakes). The WRLD's
+  LOD water height (NAM4, -14000 for Tamriel) is not used for the geometry ("not used by xLODGen").
+- **Material.** One water type for the whole worldspace: WRLD NAM3, the LOD water type (the parent's
+  when PNAM has "Use LOD Data"), applied by the engine at run time ("Terrain LOD meshes only contain
+  the information where to show LOD water"; "How the LOD water looks for an entire worldspace is
+  defined by worldspace record", DynDOLOD). Tamriel's is `DefaultWater`. The WRLD DATA flag "No LOD
+  Water" turns it off. A host passes the type as a `WaterMaterial` to `CreateDistantLod`.
+- **Shader.** The engine's water shader with its `LOD` technique (Community Shaders `Water.hlsl`):
+  position (and optionally vertex colour) only; one noise layer (`TexCoord1 = scroll + world xy /
+  NormalsScale.x`); no `REFRACTIONS` (the LOD output carries no `MPosition`), no `DEPTH`, no
+  water/wetness effects, no screen-space reflection. So the body colour is
+  `lerp(shallow, deep, fresnel) x N·L`, the refraction weight is 1 (opaque), and the colour is
+  `lerp(body, reflection, lerp(1, fresnel, distanceFactor)) + sun specular`, then the distance fog.
+  `GlWorldFactory.ApplyLodWaterMaterial` draws it that way (`u_lodKind` 4): opaque and depth-writing,
+  Fresnel (on the flat surface) and the distance factor per pixel because the quads span whole cells,
+  the reflection the sky or the sky gradient as for other water, the water type's sun specular at full
+  strength (the technique has no depth, so `depthControl.w` is 1), no Blinn term. The body is lit like
+  any surface (the engine multiplies it by N·L only); beyond 8192 units, where all LOD water lies,
+  the fraction is 1 (with the frame flag taken as 0, as above) and the body never shows.
+- **Under the loaded cells:** the segments of loaded cells are dropped (above). The terrain LOD under
+  them is lowered as usual, so no LOD water shows through it.
+
+Checked against the in-game horizon stills (lab, SkyrimClear noon, eye 17000,-47000,8000): the
+Sea of Ghosts now closes the north horizon between the ranges where only sky showed, and from the same
+eye looking west (no in-game still yet) Lake Ilinalta continues past the loaded cells instead of
+stopping at their edge. The game's haze over both is thicker than here (fog, not LOD).
+
+**Grass LOD.** Vanilla Skyrim has none: full grass renders only in the loaded cells ("In the vanilla
+game full grass only renders in active exterior cells", DynDOLOD's Grass LOD notes), and no vanilla
+`.bto` shape is grass. DynDOLOD 3 generates it from a grass cache (No Grass In Objects `*.cgid` files),
+for level 4 only, as billboards inside the object LOD: in its output a level-4 `.bto` holds a
+`grasspassthru` BSSubIndexTriShape on the object LOD atlas (`textures\DynDOLOD\LOD\DynDOLOD_<w>.dds`),
+shader type 0, `SLSF2_Vertex_Colors` without `SLSF2_LOD_Objects`, no alpha property, its vertex colours
+(about 0.65 to 0.7) carrying the generator's grass brightness. It therefore draws through object LOD
+with no grass-specific code; the vertex colours above are the one flag it needs. A host supplies only
+the generator's output (meshes and atlas) through its asset resolver; the grass cache is a generation
+input and is not read here. DynDOLOD's dynamic LOD (references in DynDOLOD.esm / .esp, switched at run
+time by its plugin from `DynDOLOD_NG_<w>.txt`) is not object LOD and is not drawn.
 
 A host that draws LOD should push its far plane out (about 100 cells is the engine's render
 distance) and pass it as `DistantLodRequest.MaxDistance`. Characters never carry `DistantLod`, so
