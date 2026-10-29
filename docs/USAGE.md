@@ -265,6 +265,12 @@ renderer.AddMesh(water);
 
 // Optional distance fog over every lit surface (for an exterior, the weather's fog).
 renderer.Fog = new DistanceFog(fogNearRgb, fogFarRgb, near, far, power, max);
+
+// Optional engine image space (for an exterior, the weather's IMGS for the time of day). The
+// engine also scales the sun's colour by the image space's sunlight scale: do that on the key light.
+renderer.SetKeyLight(azimuthDeg, elevationDeg, intensity01: sunlightScale, sunRgb);
+renderer.ImageSpace = new ImageSpaceFinish(white, saturation, brightness, contrast,
+                                           tintRgb, tintAmount, AdaptedLuminance: 0.367f);
 ```
 
 Defaults match the game (blend and tiling were checked against in-game screenshots); see

@@ -27,6 +27,10 @@
   ad hoc `fresnel x reflectivity x 4` mix toward sky x reflection colour is gone.
 - Distance fog (`GlRenderer.Fog`, `DistanceFog`): the engine's fog over every lit surface, from
   host-supplied colours and distances. Off by default, so characters are unaffected.
+- Image space (`GlRenderer.ImageSpace`, `ImageSpaceFinish`): the engine's HDR tone map and
+  cinematic grade (Reinhard curve on luminance, saturation, tint, brightness and contrast about the
+  adapted luminance) in place of the ACES finish, from host-supplied image-space values. Off by
+  default, so characters are unaffected. Docs: the fog parameter packing is now sourced.
 - Docs: a null `TerrainQuadrant.Base` draws white; the default landscape texture is a host fallback.
 - Docs: glow maps (`SLSF2_Glow_Map`) were already applied by `NifMaterialBinder`; the flag table
   and Stage 5 now say so.

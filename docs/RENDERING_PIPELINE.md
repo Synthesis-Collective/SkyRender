@@ -1153,15 +1153,65 @@ offset), the refraction fog, the sun specular, flow maps, the second and third n
 the water reflection, in the engine's form (Community Shaders' `Lighting.hlsl` and `Water.hlsl`):
 with d the distance from the camera, `f = min(max, saturate((d - near) / (far - near)) ^ power)`, and
 the colour moves to `lerp(nearColor, farColor, f)` by `f`. The shader takes the engine's packed
-parameters, `(near / range, 1 / range, power, max)`; how the engine fills the first two from a
-weather's near and far distances is not in the shader, and this reading of them is the natural one.
-A host supplies the colours and distances; for a Skyrim exterior they are the weather's fog near and
+parameters, `(near / range, 1 / range, power, max)`, which is how the engine fills them from its fog
+property's start and end distances, power and clamp (a published reimplementation of the engine's
+lighting-shader setup, `TechUpdateFogConstants`, writes `FogParam` this way, and the near colour also
+goes to the pixel shader's `FogColor`). A host supplies the colours and distances; for a Skyrim exterior they are the weather's fog near and
 far colours and its day or night fog distances, power and max. Effect-shader shapes are not fogged.
 Characters are unaffected unless a host sets it.
 
-Not modelled: the weather's image space (eye adaptation, cinematic brightness, contrast and tint).
-An in-game exterior reads about 1.6 to 2 times brighter than the same scene lit by its weather's
-sun and ambient colours alone, which is that pass.
+Checked against the game (Riverwood, SkyrimClear at noon, a high aerial and a low shot toward the
+village): with the image space below applied, the haze is no heavier than the game's, and the
+game's distance reads paler than ours rather than bluer. The heavy blue-grey haze seen without the
+image space came from the surfaces, not the fog: lit by the unscaled sun they sat far below the fog
+colour, so the fog's lerp dominated.
+
+### Image space
+
+`GlRenderer.ImageSpace` (an `ImageSpaceFinish`, null by default) finishes every lit surface and the
+clear colour with the engine's HDR tone map and cinematic grade, in place of the renderer's ACES
+finish (and its sRGB framebuffer encode and bloom). It is the arithmetic of the retail
+`ISHDRTonemapBlendCinematic` pixel shader (Reinhard branch), with the constants the engine packs
+from the image space's data. With `A` the lit colour and `L = (0.2125, 0.7154, 0.0721)`:
+
+```
+Y = max(dot(A, L), 1e-5)             Z = Y * exposureRatio
+Q = Z * (1 + k * Z) / (1 + Z)        k = 1 / (White * 1.1)^2   (1.1 = fReinhardWhiteScale)
+rgb = A * Q / Y                      K = dot(rgb, L)
+g = lerp(K, rgb, Saturation)         g = lerp(g, K * TintColor, TintAmount)
+out = saturate(P + Contrast * (Brightness * g - P)) ^ outputExponent
+```
+
+The tone curve acts on luminance and returns to RGB by `Q / Y`; the contrast pivot `P` is the first
+channel of the engine's adaptation texture. Sources: Community Shaders' `ISHDR.hlsl` as first ported
+from the game, and a published audit of the retail shader bytecode and the engine's constant
+packing (curve coefficient `(White * fReinhardWhiteScale)^-2`, observed 0.8264 for White 1;
+cinematic row `(saturation, 0, contrast, brightness)`; final exponent 1 at `fGamma` 1). That audit
+also read a frame at SkyrimClear noon with both adaptation channels equal (exposure ratio 1) at
+0.36 to 0.375.
+
+What a host supplies, and what is not modelled:
+- **Adapted luminance.** The engine eases both adaptation channels toward the frame's average
+  luminance over time (eye adapt speed and strength set the rates), so once settled the exposure
+  ratio is 1 and `P` is that average. A single frame has no history, so the host passes `P`
+  (`ImageSpaceFinish.AdaptedLuminance`) and, if it wants, `ExposureRatio`.
+- **Sunlight scale.** The engine multiplies the sun's colour by the image space's HDR sunlight
+  scale when it sets the lighting shader's `DirLightColor` (the same reimplementation reads it from
+  the image-space manager's current data). That is a lighting input, so the host scales its key
+  light; `ImageSpaceFinish` does not.
+- **Not modelled:** bloom (the engine adds a blurred bright pass weighted by
+  `saturate(receiveBloomThreshold - Q)`; its producer is not documented), the filmic curve branch,
+  the sky scale, and fades.
+- The finish runs per fragment, before blending, because the frame is drawn to an 8-bit target;
+  the engine grades the blended frame. Opaque surfaces are unaffected by the difference; blended
+  effects are approximate. Other shaders (gizmos, unlit vertex colour) are not graded.
+
+Checked against the game (same scenes as the fog, plus a close-up of the ground): the close-up's
+sunlit ground matches the game's brightness. Overall the frame is a little darker and more
+saturated than the game's (mean luminance 0.47 against 0.59 on the aerial, 0.38 against 0.44 on the
+low shot), in line with the missing bloom: in the audited frame bloom added about 0.1 where it was
+sampled. Without the image space the weather-lit frame was about 1.6 to 2 times darker than the
+game.
 
 ### Trees (`SLSF2_Tree_Anim`)
 
