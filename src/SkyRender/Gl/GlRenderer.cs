@@ -9,7 +9,7 @@ namespace SkyRender;
 /// <summary>
 /// Which half-space of the section-clip plane gets thrown away. "Front" and "Back"
 /// are relative to the camera at the moment the user armed the clip, not to the
-/// character's own facing.
+/// model's own facing.
 /// </summary>
 public enum ClipPlaneMode
 {
@@ -19,12 +19,13 @@ public enum ClipPlaneMode
     /// becomes the nearest visible surface (cut away the near side to look inside the model).</summary>
     Front = 1,
     /// <summary>Discard everything BEYOND the plane, keeping only what sits between
-    /// the camera and it (isolate the near surface from the far side of the body).</summary>
+    /// the camera and it (isolate the near surface from the far side of the model).</summary>
     Back = 2,
 }
 
 /// <summary>
-/// Core OpenGL renderer for the character viewer. Manages the shader program,
+/// Core OpenGL renderer: draws NIF meshes (a single model, a character, or a whole scene of
+/// placed objects). Manages the shader program,
 /// draws all meshes with proper material uniforms, and handles lighting.
 /// </summary>
 public class GlRenderer : IDisposable
@@ -138,7 +139,7 @@ public class GlRenderer : IDisposable
     /// pipeline, and the GL framebuffer is treated as sRGB so the linear
     /// lighting result is gamma-encoded once on write. Compresses HDR
     /// highlights, lifts shadows into perceptual space, and adds the
-    /// contrast / warmth that makes the output read as a portrait
+    /// contrast / warmth that makes the output read as photographic
     /// rather than a flat render. Off: legacy linear-to-display output
     /// (pre-2.5.9 look). Hosts mirror their settings toggle here before
     /// each Render call.</summary>
@@ -185,7 +186,7 @@ public class GlRenderer : IDisposable
 
     /// <summary>Light-frustum scene radius (world units, pre-ModelScale)
     /// used when <see cref="TightShadowFrustum"/> is on. Default 300 is the
-    /// legacy value; ~100 clearly tightens a head-and-shoulders portrait.</summary>
+    /// legacy value; ~100 clearly tightens a close-up of one character.</summary>
     public float ShadowFrustumRadius { get; set; } = 100f;
 
     /// <summary>When true, <see cref="Render"/> runs a depth pre-pass +
@@ -420,7 +421,7 @@ public class GlRenderer : IDisposable
 
     /// <summary>
     /// Sphere (pre-ModelScale centre and radius) the directional shadow map must cover. Null (the
-    /// default) keeps the character framing: centred at Y=85 with radius 300, or
+    /// default) suits one human-sized model: centred at Y=85 with radius 300, or
     /// <see cref="ShadowFrustumRadius"/> when <see cref="TightShadowFrustum"/> is on. Set it for
     /// scenes of another size, such as a whole cell.
     /// </summary>
@@ -848,8 +849,8 @@ public class GlRenderer : IDisposable
     public Vector3 ClearColor { get; set; } = new Vector3(0.41f, 0.41f, 0.41f); // DimGray
 
     /// <summary>Uniform scale applied to the world-space mesh geometry via the
-    /// model matrix. Drives the NPC-height multiplier — 1.0 is identity; 1.1
-    /// is a 10% taller character. Meshes are already in world space, so this
+    /// model matrix — 1.0 is identity; 1.1 makes the scene 10% larger (the
+    /// character tier uses it for NPC height). Meshes are already in world space, so this
     /// is applied in the model matrix rather than per-mesh.</summary>
     public float ModelScale { get; set; } = 1.0f;
 
@@ -1770,8 +1771,8 @@ public class GlRenderer : IDisposable
 
     /// <summary>Computes the orthographic light-space view-projection matrix
     /// for the key directional light. Uses a fixed scene radius (300 world
-    /// units around the camera target) which covers any reasonable Skyrim
-    /// NPC + accessories at the heights the renderer is used at; avoiding
+    /// units around the camera target, or <see cref="ShadowBounds"/> when set). The
+    /// default covers one human-sized model with its accessories; avoiding
     /// a per-frame bbox walk keeps the cost negligible. The output is
     /// uploaded to <c>u_lightViewProj</c> on the main shader so
     /// <c>basic.frag</c>'s shadow lookup can transform world positions into
@@ -1791,7 +1792,7 @@ public class GlRenderer : IDisposable
         // Place the light "eye" along the surface-to-light direction far
         // enough that the whole scene fits inside the orthographic
         // frustum. Center on ShadowBounds when the host set it; otherwise on a
-        // character's chest height (Y=85 pre-scale). Both scale by ModelScale.
+        // human-sized model's chest height (Y=85 pre-scale). Both scale by ModelScale.
         var sceneCenter = ShadowBounds is { } bounds
             ? bounds.Center * ModelScale
             : new Vector3(0f, 85f * ModelScale, 0f);
@@ -2613,8 +2614,8 @@ public class GlRenderer : IDisposable
             float shaftLen = length - headLen;
 
             // Anchor the tip at the camera's look-at point so arrows track
-            // whatever the host framed (head/face for Auto-mode mugshots, full
-            // body for Manual orbits) instead of the old fixed chest-height.
+            // whatever the host framed (a face close-up, a full body, a room)
+            // instead of the old fixed chest-height.
             var tip = camera.Target;
             var tail = tip - shineDir * length;
             var shaftEnd = tip - shineDir * headLen;
@@ -2966,12 +2967,12 @@ public class GlRenderer : IDisposable
     /// state captured — GL_FRAMEBUFFER_SRGB, viewport, bound draw-FBO, and
     /// the FBO's color-attachment color-encoding + component-type — surfaces
     /// driver / framebuffer-level info that CPU-side property dumps don't see.
-    /// Intended as a general diagnostic for portrait-rendering differences
-    /// between the offscreen mugshot pathway (private Rgba8 resolve FBO +
+    /// Intended as a general diagnostic for rendering differences
+    /// between the offscreen pathway (private Rgba8 resolve FBO +
     /// ReadPixels) and the live-preview pathway (blits to GLWpfControl's
     /// WPF-managed backbuffer, whose format is opaque from this side).
     /// Whether any specific bug is explained by this state depends on the
-    /// bug; for the Khajiit mugshot transparency issue traced in late 2026
+    /// bug; for the Khajiit-face transparency issue in offscreen renders, traced in late 2026
     /// this query confirmed both pathways had matching MSAA Rgba8 FBOs and
     /// the actual cause was downstream (PNG alpha-channel write-through),
     /// not GL state.</summary>
@@ -3095,13 +3096,13 @@ public class GlRenderer : IDisposable
     }
 
     /// <summary>Converts azimuth/elevation (degrees) to the surface-to-light vector
-    /// convention used by the shader (NdotL = dot(normal, direction)). The character
-    /// faces world -Z (NIF +Y_nif mapped through R_X(-90) to -Z_yup), and the orbit
-    /// camera at az=180 places the eye at -Z (front of character). For the light
+    /// convention used by the shader (NdotL = dot(normal, direction)). Models
+    /// face world -Z (NIF +Y_nif mapped through R_X(-90) to -Z_yup), and the orbit
+    /// camera at az=180 places the eye at -Z (in front of the model). For the light
     /// to share this convention - az=180 puts the light on the camera side (front)
     /// - this formula must match OrbitCamera.GetViewMatrix's offset formula exactly
     /// (no negated Z). A prior version negated the Z term on the mistaken assumption
-    /// that the character faced +Z, which put all az=180 lights behind the character.</summary>
+    /// that models faced +Z, which put all az=180 lights behind the model.</summary>
     private static Vector3 DirectionFromAzEl(float azimuthDeg, float elevationDeg)
     {
         float az = MathHelper.DegreesToRadians(azimuthDeg);
@@ -3126,10 +3127,10 @@ public class GlRenderer : IDisposable
             // fullscreen VAO, and the lazily-created shadow / SSAO FBOs were all
             // created in Initialize()/EnsureShadowFbo()/EnsureSsaoFbos() but were
             // previously NOT deleted here. A fresh GlRenderer is built and disposed
-            // for every offscreen mugshot, so each render leaked these GL objects.
+            // for every offscreen render, so each render leaked these GL objects.
             // Driver-side program/texture/FBO memory is unmanaged (invisible to the
             // GC), which is the source of the monotonic native memory climb during
-            // batch mugshot generation. Keep this symmetric with the resource set
+            // batch offscreen rendering. Keep this symmetric with the resource set
             // enumerated in ForgetResourcesFromDeadContext().
             _shadowShader?.Dispose();
             _depthOnlyShader?.Dispose();

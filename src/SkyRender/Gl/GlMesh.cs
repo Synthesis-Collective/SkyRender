@@ -155,7 +155,8 @@ public class GlMesh : IDisposable
     public float AlphaThreshold { get; set; }
     public float GreyscaleToPaletteScale { get; set; } = 1f;
     public Vector3 TintColor { get; set; } = Vector3.One;
-    // Default glossiness / specular tuned for portrait skin. The
+    // Default glossiness / specular tuned for skin (the common case for a mesh whose NIF
+    // carries no explicit values). The
     // pre-2.5.9 defaults (80f / 1f) produced overly tight, plastic-looking
     // highlights on faces when the source NIF didn't carry explicit shader
     // values — most modded face NIFs DO provide their own values, so this

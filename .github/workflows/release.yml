@@ -1,5 +1,5 @@
 # Builds, tests and publishes SkyRender + SkyRender.Character to nuget.org when a v* tag is pushed.
-# Uses nuget.org Trusted Publishing (no stored API key); see docs/PUBLISHING.md, Part 3.
+# Uses nuget.org Trusted Publishing (no stored API key).
 name: release
 
 on:

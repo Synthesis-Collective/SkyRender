@@ -65,9 +65,9 @@ dotnet run --project samples/SkyRender.Demo
 - [Usage guide](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/USAGE.md)
 - [Rendering pipeline](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/RENDERING_PIPELINE.md):
   how NIF data flows through parsing, materials, lighting and post-processing.
-- [Migrating from CharacterViewer.Rendering](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/MIGRATING_FROM_CHARACTERVIEWER_RENDERING.md)
+- [Character pipeline](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/CHARACTER_PIPELINE.md):
+  what SkyRender.Character adds: NPC inputs, overrides, the interactive viewer.
 - [Changelog](https://github.com/Synthesis-Collective/SkyRender/blob/main/CHANGELOG.md)
-- Maintainers: [publishing](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/PUBLISHING.md).
 
 ## Authorship
 

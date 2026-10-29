@@ -610,8 +610,8 @@ void main()
         if (is_model_space) {
             vec3 normal_modelSpace = texture(texture_normal, TexCoords).rgb * 2.0 - 1.0;
             // Bethesda MSN textures are stored in Y-up local model space with
-            // the character's forward direction as +Z_local. Our viewer uses
-            // Y-up world space with character facing -Z_world, so flip Z to
+            // the model's forward direction as +Z_local. The renderer uses
+            // Y-up world space with models facing -Z_world, so flip Z to
             // align. Unlike tangent-space normal maps, MSN does NOT use the
             // DirectX G-flip convention because MSN is model-space not
             // tangent-space. Empirical verification: raw texture sample at
@@ -789,7 +789,7 @@ void main()
             //
             // u_subsurfaceStrength is a global multiplier letting users
             // dial the SSS up toward the more pronounced look in
-            // professional portrait reference. 0 disables; 1 is honest
+            // studio photography. 0 disables; 1 is honest
             // source-value SSS; >1 boosts. At 0 the corrected pipeline
             // produces zero contribution, matching the pre-2.5.14 look
             // when the host has SubsurfaceStrength set to 0.
@@ -964,7 +964,7 @@ void main()
     // --- 6. TONE-MAPPING & COLOR GRADE (since 2.5.9) ---
     // ACES filmic approximation (Narkowicz 2015) compresses HDR highlights,
     // adds a soft toe in the shadows, and produces the warm shoulder that
-    // makes the output read as a portrait rather than a flat linear render.
+    // makes the output read as photographic rather than a flat linear render.
     // Pairs with FRAMEBUFFER_SRGB on the host side: this stage outputs
     // linear values, the framebuffer gamma-encodes on write. Without
     // FRAMEBUFFER_SRGB the output displays too dark.
@@ -1003,8 +1003,7 @@ void main()
 
         // Vignette (2.5.15+). Subtle radial darkening from screen
         // center toward the corners; reads less as a "vignette effect"
-        // and more as the natural lens falloff every photographic
-        // portrait has. Folded under the tone-map toggle so the
+        // and more as the natural lens falloff of a camera lens. Folded under the tone-map toggle so the
         // legacy bit-for-bit-reproducible linear path stays untouched
         // when tone-mapping is off.
         //

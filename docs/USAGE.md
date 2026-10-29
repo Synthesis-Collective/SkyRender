@@ -82,6 +82,12 @@ With OpenTK.GLWpfControl, start the control with an OpenGL 3.3 context and do st
 
 ```csharp
 GlControl.Start(new GLWpfControlSettings { MajorVersion = 3, MinorVersion = 3, RenderContinuously = true });
+
+// GLWpfControl 4.x hooks its render loop up in IsVisibleChanged, which never fires for a control
+// that is already visible when Start() runs. Toggle visibility once, or no frame is drawn until
+// something else forces a redraw.
+GlControl.Visibility = Visibility.Collapsed;
+GlControl.Visibility = Visibility.Visible;
 ```
 
 Forward mouse input to the camera with `camera.OnMouseDown(x, y, leftButton, middleButton)`,
@@ -244,4 +250,5 @@ Forward mouse input to `viewer.Camera` as in section 3. The two WPF panels
   hook on the first thread that touches it), then call it from anywhere.
 - The coordinate system is Y-up, as converted from the NIF's Z-up; models face -Z.
 
-See [RENDERING_PIPELINE.md](RENDERING_PIPELINE.md) for how the renderer works inside.
+See [RENDERING_PIPELINE.md](RENDERING_PIPELINE.md) for how the renderer works inside, and
+[CHARACTER_PIPELINE.md](CHARACTER_PIPELINE.md) for what the character tier adds.
