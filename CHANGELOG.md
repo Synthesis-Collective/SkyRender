@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New sample `samples/SkyRender.CellDemo`: a WPF viewer that draws any interior or exterior cell of
+  the installed game at full detail (terrain, water, grass, weather or cell lighting, statics,
+  effects, placed lights, optional distant LOD and neighbouring cells). It reads the game through
+  Mutagen, a dependency of the sample only.
 - `ReferencePlacement` (`SkyRender.World`): a placed reference's `GlMesh.ModelTransform` from its
   position, rotation and scale with the engine's rotation convention (clockwise angles, Z applied
   first), less the model's root-node transform, which the engine does not apply to a reference

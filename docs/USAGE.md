@@ -1,7 +1,9 @@
 # Using SkyRender
 
 This guide walks through the common tasks, from "show one NIF" to NPC portraits. The runnable
-version of sections 2-3 is the sample app in [`samples/SkyRender.Demo`](../samples/SkyRender.Demo).
+version of sections 2-3 is the sample app in [`samples/SkyRender.Demo`](../samples/SkyRender.Demo);
+[`samples/SkyRender.CellDemo`](../samples/SkyRender.CellDemo) puts sections 7-8 together into a
+whole cell read from the game's plugins.
 
 - [1. Install](#1-install)
 - [2. Connect SkyRender to the game files](#2-connect-skyrender-to-the-game-files)

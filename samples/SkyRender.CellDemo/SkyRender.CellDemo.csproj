@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Cell viewer: pick an interior or exterior cell of the installed game and see it drawn at full
+       detail (terrain, water, grass, weather, statics, lights). The game data and load order come
+       through Mutagen, which only this sample references: the SkyRender packages stay free of it.
+       Not packed. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>SkyRender.CellDemo</RootNamespace>
+    <AssemblyName>SkyRender.CellDemo</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SkyRender\SkyRender.csproj" />
+    <!-- Hosts SkyRender's GL output in WPF. Same version SkyRender.Character uses. -->
+    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
+    <!-- The load order, the plugins' records and the BSA archives. The version SkyRender.Demo uses;
+         Mutagen 0.54 needs net9+, hence the net10 target. -->
+    <PackageReference Include="Mutagen.Bethesda" Version="0.54.2" />
+    <PackageReference Include="Mutagen.Bethesda.Skyrim" Version="0.54.2" />
+  </ItemGroup>
+</Project>

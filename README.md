@@ -53,6 +53,8 @@ the wheel to zoom.
 dotnet run --project samples/SkyRender.Demo
 ```
 
+[`samples/SkyRender.CellDemo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.CellDemo) draws a whole interior or exterior cell of the installed game.
+
 ## Platform
 
 - Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
