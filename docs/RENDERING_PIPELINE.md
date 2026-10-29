@@ -40,6 +40,7 @@ A reference for how SkyRender parses NIF meshes and renders them, with side-by-s
 6. [Part 5 — GL context ownership](#part-5--gl-context-ownership)
 7. [Part 6 — Terrain and water](#part-6--terrain-and-water)
    - [Scene defaults](#scene-defaults)
+   - [Grass](#grass)
    - [Distant LOD](#distant-lod)
 8. [Appendix A — Shader flag inventory table](#appendix-a--shader-flag-inventory-table)
 9. [Appendix B — BSLightingShaderProperty field inventory](#appendix-b--bslightingshaderproperty-field-inventory)
@@ -1396,6 +1397,104 @@ The background is the gradient at 20 degrees; water reflects the gradient. The a
 (the contrast pivot) is the retail adaptation texture read at SkyrimClear noon, fixed since a single
 frame has no adaptation history.
 
+### Grass
+
+Near-field grass: the GRAS records a landscape texture lists (LTEX GNAM), grown on the loaded
+exterior cells the way the engine's grass manager does and drawn instanced. Code:
+[World/Grass.cs](../src/SkyRender/World/Grass.cs) (GL-free), `GlWorldFactory.CreateGrass`,
+`GlMesh.IsGrass` / `UploadInstances`, `u_grass` in `basic.vert` / `basic.frag`.
+
+```
+host reads LAND (heights, VCLR, layers) + LTEX GNAM + GRAS, and the GRAS models (NIF)
+      │
+      ▼
+TerrainCell (TerrainTexture.Grasses on each base and alpha layer) + GrassSettings ([Grass] INI)
+      │
+      ▼
+[World/Grass.cs] GrassPlacer.Place -> GrassPlacement (instances per GrassType)   (GL-free, testable)
+      │
+      ▼
+GlWorldFactory.CreateGrass: per type and model shape, one instanced GlMesh (GrassInstanceData)
+```
+
+**Records** (UESP GRAS; Mutagen's `Grass`; the enum order is the record's): density (percent), min /
+max slope (degrees), units from water and how it applies (above / below / either, at least / at most,
+and either-at-most-above / below), position range, height range, colour range, wave period, and the
+flags Vertex Lighting, Uniform Scaling, Fit to Slope. The host gives each base and alpha layer the
+grasses its LTEX lists; a quadrant with no base layer gets none (its default texture is the host's).
+
+**Placement** (`GrassPlacer`). Sources: No Grass In Objects NG's `GrassPatchCreation.cpp`, a
+reimplementation of the engine's grass patch function (its parameter block, density grid, candidate
+grid, random draw order, water and slope tests, brightness and instance encoding), and its `[Grass]`
+settings; the engine defaults are the STEP INI guide's.
+
+- For each quadrant, each texture painted on it (the base and each alpha layer) and each of that
+  texture's first `iMaxGrassTypesPerTexure` grasses (default 2), the quadrant is covered by 8 × 8
+  patches. A patch has a 3 × 3 density grid, one value per grid vertex, and the engine's candidate
+  grid spans two density intervals, so a patch is 2 × 2 grid squares (256 units). That size is read
+  off the grid layout, not stated by a source.
+- A patch tests `side × side` candidates, `side = min(256 / PositionRange, 256 / iMinGrassSize)`
+  (iMinGrassSize default 20), at `start + (2i + 1) × spacing` plus a jitter in ±spacing, with
+  spacing = 256 / (2 side).
+- A candidate is kept when `(random & 0x7FFF) < density × 32768`, the density taken bilinearly from
+  the patch's grid. Each grid value is the grass's density times the texture's share of the ground at
+  that vertex. The engine fills that grid from the layers' opacities (`fTexturePctThreshold`, default
+  0, cuts low shares); how it weighs the layers is not documented. The placer uses the share each
+  texture has in the drawn blend (`TerrainBlendMode.Over`): layer i keeps `o_i × Π_{j>i}(1 − o_j)`,
+  the base `Π_j(1 − o_j)` (`GrassPlacer.TextureShares`). This is a model.
+- Then the ground at the candidate: the height on the drawn triangles and that triangle's face normal.
+  The water rule is tested against the cell's water height, as the engine's switch does (`lower` /
+  `upper` = water ∓ units; the two "either at most above / below" rules accept everything there).
+  The slope rule keeps `cos(maxSlope) ≤ normal.z ≤ cos(minSlope)`, with the angle quantised to 512
+  steps a turn (the engine's 512-entry table, indexed at 512 / 2π per radian; read as a cosine table
+  because its values bound `normal.z`).
+- An instance gets a brightness `lum(VCLR) × ((1 − ColorRange) + r × ColorRange / 4)`, kept below 1,
+  with lum = 0.31 R + 0.37 G + 0.32 B of the LAND vertex colour; a turn about Z whose cosine is uniform
+  in [−1, 1] (sine non-negative); and a scale variation `r × HeightRange`. With Fit to Slope the turn
+  is applied in a frame whose Z is the ground normal (tangent from the normal's two largest
+  components).
+- **Positions differ from the game.** The engine draws all of this from one shared random generator
+  (a Mersenne Twister), whose state depends on what loaded before; NGIO adds a per-patch seed of its
+  own so threads cannot change the result. No source gives the engine's positions, so the placer
+  uses its own generator seeded from the cell, quadrant, texture, grass `Id` and patch
+  (`GrassSettings.Seed` mixes in a host seed). The counts, spacing and distribution follow the GRAS
+  parameters; the exact tufts do not match a game screenshot.
+- With a camera, cells and patches wholly beyond `fGrassStartFadeDistance + fGrassFadeRange` are
+  skipped (they would fade out completely). The engine grows grass in the cells within
+  `iGrassCellRadius` (default 2) of the player; the host chooses the cells.
+
+**Shading** (the engine's `RunGrass` shader: the vanilla FlatL technique as reverse-engineered in
+Nukem9's skyrimse-test `RunGrass.hlsl` and `BSGrassShader.cpp`, and Community Shaders' `RunGrass.hlsl`):
+
+- Vertex: `p × (1 + variation × ScaleMask)`, ScaleMask (1, 1, 1) with Uniform Scaling and (0, 0, 1)
+  without, then the instance rotation and position (`GrassInstanceData`, 16 floats an instance,
+  attribute locations 8-11, `glDrawElementsInstanced`). Vertex alpha is the wind weight; a still
+  frame draws no wind (wave period unused).
+- Colour: `diffuse × vertexColour × brightness × (sun × saturate(N·L) × shadow + ambient)`, then the
+  scene's fog and image space. N is the instance's up axis (FlatL); with Vertex Lighting it is the
+  rotated mesh normal (the VertexL technique; its decompile is not published, so this is a model). The
+  grass techniques are directional-only: no point lights, no specular. The engine also lerps the
+  shadow towards 1 by `fShadowClampValue`; not applied here.
+- Alpha: `textureAlpha × (1 − saturate((distance − fGrassStartFadeDistance) / fGrassFadeRange))`,
+  alpha-tested against the model's threshold (grass draws in the alpha-test pass, depth-written).
+  Defaults 7000 (the launcher's highest setting, the lab profile's value) and 1000.
+- Shadows: grass receives the sun's shadow map and casts none (`bShadowsOnGrass` makes objects shadow
+  grass; grass itself casts none, per the STEP SkyrimPrefs guide). It is also left out of the depth
+  prepass (SSAO, water depth) and the wireframe overlay.
+
+Characters never carry `IsGrass`, and `u_grass` is false for every other mesh, so character output is
+unchanged.
+
+**Checked against the game** (lab, SkyrimClear noon, grass on; a low meadow view and a close-up
+looking down over Riverwood): the grass grows where the game has it (meadow, not the rocky path or
+the road), at a similar height and spread. It draws far too bright, though: the mean colour of a
+foreground grass patch is (123, 131, 70) here against (46, 53, 26) in the game, and (193, 199, 107)
+against (83, 91, 60) from above, so the bright grass saturates to yellow. With the sun term
+dropped (`DEBUG_GRASS_AMBIENT_ONLY` in `basic.frag`, off) it reads (62, 75, 43) and (109, 123, 68),
+much nearer. The decompiled FlatL technique does light grass with `saturate(dot(DirLightDirection,
+instanceUp))`; what sun colour and direction the engine passes in, and whether the sun's HDR scale
+is part of it, is not settled by a source. So the sourced shading stays and the gap stays open.
+
 ### Trees (`SLSF2_Tree_Anim`)
 
 On tree shapes the vertex colour's alpha is the wind-sway weight: the engine's vertex shader scales the
@@ -1523,7 +1622,7 @@ stopping at their edge. The game's haze over both is thicker than here (fog, not
 
 **Grass LOD.** Vanilla Skyrim has none: full grass renders only in the loaded cells ("In the vanilla
 game full grass only renders in active exterior cells", DynDOLOD's Grass LOD notes), and no vanilla
-`.bto` shape is grass. DynDOLOD 3 generates it from a grass cache (No Grass In Objects `*.cgid` files),
+`.bto` shape is grass (that full grass is drawn by [Grass](#grass)). DynDOLOD 3 generates it from a grass cache (No Grass In Objects `*.cgid` files),
 for level 4 only, as billboards inside the object LOD: in its output a level-4 `.bto` holds a
 `grasspassthru` BSSubIndexTriShape on the object LOD atlas (`textures\DynDOLOD\LOD\DynDOLOD_<w>.dds`),
 shader type 0, `SLSF2_Vertex_Colors` without `SLSF2_LOD_Objects`, no alpha property, its vertex colours

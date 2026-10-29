@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Near-field grass (`SkyRender.World`). `TerrainTexture.Grasses` carries a landscape texture's grass
+  list (LTEX GNAM, as `GrassType`: the GRAS fields); `GrassPlacer.Place(cells, GrassSettings,
+  waterHeight, camera)` grows it GL-free, by the engine's rules (patches of 2 × 2 grid squares, a
+  candidate grid capped by `iMinGrassSize`, density times each texture's share of the ground, the
+  slope and water tests, brightness from the LAND vertex colour and the colour range, a random turn
+  and scale, optional fit to slope; `iMaxGrassTypesPerTexure` grasses per texture), with its own
+  seeded random numbers, so positions are repeatable but not the game's; cells beyond the fade are
+  skipped. `GrassInstanceData` packs the instances; `GlWorldFactory.CreateGrass` (with
+  `UploadGrassInstances` / `ApplyGrassMaterial`, `GlGrass`) draws each type and model shape as one
+  instanced mesh (`GlMesh.IsGrass`, `UploadInstances`, `InstanceCount`, `GrassVertexLit`,
+  `GrassFadeStart` / `GrassFadeRange`; `glDrawElementsInstanced`; shader uniform `u_grass`) with the
+  engine's grass shading: diffuse × vertex colour × brightness, lit by the sun on the instance's up
+  axis (or the vertex normal with Vertex Lighting) under its shadow plus the ambient, no point lights
+  or specular, alpha faded by `fGrassStartFadeDistance` / `fGrassFadeRange` before the alpha test.
+  Grass receives sun shadows and casts none; it is left out of the depth prepass and the wireframe
+  overlay. Meshes without `IsGrass` (every character) are unchanged.
 - Distant LOD: LOD water and LOD vertex colours. `LodKind.Water` / `LodKinds.Water` (now part of
   `LodKinds.All`): the flat quads under each terrain LOD block's `WATER` node, read in the same pass
   as the terrain (`LodNifReader.Read(path, includeWater)`, `LodShape.IsWater`), placed at the block at

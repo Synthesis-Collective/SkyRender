@@ -321,6 +321,38 @@ sourceTexture, hasSourceTexture, greyscaleTexture)` instead. The shading is stat
 controllers and particle systems are not drawn. See
 [RENDERING_PIPELINE.md, Effect shaders](RENDERING_PIPELINE.md#effect-shaders-bseffectshaderproperty).
 
+**Grass.** The grass the game draws in loaded exterior cells: the GRAS records each landscape
+texture lists (LTEX GNAM), grown on your `TerrainCell`s and drawn instanced:
+
+```csharp
+using SkyRender.World;
+
+// Each base and alpha layer names the grasses of its LTEX (GRAS fields as read from the record).
+var fieldGrass = new GrassType
+{
+    Id = grasFormId, ModelPath = @"meshes\landscape\grass\fieldgrass01.nif",
+    Density = 64, MinSlope = 0, MaxSlope = 45, PositionRange = 30, HeightRange = 0.38f, ColorRange = 0.2f,
+    Flags = GrassFlags.UniformScaling | GrassFlags.FitToSlope,
+};
+var tex = new TerrainTexture(@"textures\landscape\fieldgrass02.dds") { Grasses = new[] { fieldGrass } };
+
+// Off the GL thread if you like. Settings are the [Grass] INI values (defaults: the engine's).
+var placement = GrassPlacer.Place(cells, new GrassSettings { StartFadeDistance = 7000f },
+    waterHeight: cell => cellWaterHeightOrNull, camera: eyeZUp);   // the camera skips cells beyond the fade
+
+// On the GL thread: for each grass type, fresh meshes for its model's shapes in the model's own space
+// (as NifMeshBuilder emits them), uploaded and given their diffuse and alpha threshold.
+var grass = GlWorldFactory.CreateGrass(placement, type => LoadGrassShapes(type.ModelPath));
+grass.AddTo(renderer);
+// placement.InstanceCount / Types say what was placed; grass.MissingModels what could not be drawn.
+```
+
+The placement follows the GRAS parameters (density, spacing, slope, water, scale, brightness) with
+SkyRender's own seeded random numbers: the counts and spread match the engine's rules, the exact
+positions are not the game's. Grass is lit by the sun (under its shadows) and the ambient, fades out
+at the INI's fade distance, and casts no shadow. Dispose `GlGrass` on the GL thread. See
+[RENDERING_PIPELINE.md, Grass](RENDERING_PIPELINE.md#grass).
+
 **Distant LOD.** A worldspace's terrain, object, tree and water LOD, drawn beyond the cells you load:
 
 ```csharp
