@@ -100,7 +100,10 @@ face **-Z**, so `Azimuth = 180` looks at the front. For scenes much larger or sm
 character, also set `renderer.ShadowBounds = (centre, radius)` so the shadow map covers them.
 
 **Placing several objects.** Give each mesh a `GlMesh.ModelTransform` (an OpenTK `Matrix4`:
-scale, rotation, translation) instead of moving its vertices.
+scale, rotation, translation) instead of moving its vertices. For a placed reference (REFR),
+`SkyRender.World.ReferencePlacement.ModelTransform(position, angles, scale,
+ReferencePlacement.ReadRootTransform(nifPath))` builds it from the record's values in Skyrim units,
+with the engine's rotation order and without the model's root transform, as the game places it.
 
 **Cleaning up.** `renderer.ClearMeshes()` disposes the meshes; dispose the `GlTextureManager` and
 the `GlRenderer` on the GL thread when you are done.

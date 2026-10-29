@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `ReferencePlacement` (`SkyRender.World`): a placed reference's `GlMesh.ModelTransform` from its
+  position, rotation and scale with the engine's rotation convention (clockwise angles, Z applied
+  first), less the model's root-node transform, which the engine does not apply to a reference
+  (`ReadRootTransform`, `FromNifTransform`, `ToMeshSpace` / `ToWorldSpace`).
+- `SkyGradient.FromSkyDome(horizon, skyLower, skyUpper, fogFar, fogMax, skyScale)` builds a
+  weather's sky gradient (the vanilla dome's masks, now shared with `SceneEnvironment.VanillaClearDay`,
+  whose values are unchanged), and `SceneEnvironment.SunDirection(...)` places the sun from a
+  climate's sunrise and sunset times on the vanilla sun path.
 - Grass is lit by the sun's plain colour. The engine's grass setup passes the sun light's diffuse
   colour as it is, where the lighting shader multiplies it by the image space's sunlight scale (2.8
   under the vanilla clear day), so grass now takes the key light's colour without its intensity and

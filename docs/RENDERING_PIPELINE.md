@@ -40,6 +40,7 @@ A reference for how SkyRender parses NIF meshes and renders them, with side-by-s
 6. [Part 5 — GL context ownership](#part-5--gl-context-ownership)
 7. [Part 6 — Terrain and water](#part-6--terrain-and-water)
    - [Scene defaults](#scene-defaults)
+   - [Placing references](#placing-references)
    - [Grass](#grass)
    - [Distant LOD](#distant-lod)
 8. [Appendix A — Shader flag inventory table](#appendix-a--shader-flag-inventory-table)
@@ -1396,6 +1397,37 @@ step is an in-game fit, not sourced (the bare dome is far darker and bluer than 
 The background is the gradient at 20 degrees; water reflects the gradient. The adapted luminance
 (the contrast pivot) is the retail adaptation texture read at SkyrimClear noon, fixed since a single
 frame has no adaptation history.
+
+A host with another weather builds the same sky with `SkyGradient.FromSkyDome(horizon, skyLower,
+skyUpper, fogFar, fogMax, skyScale)` (the weather's colours for the time of day, its fog maximum,
+its image space's sky scale), which `VanillaClearDay` is built with. `SceneEnvironment.SunDirection(
+sunriseBegin, sunriseEnd, sunsetBegin, sunsetEnd, hour)` places the sun from a climate's timing on
+the vanilla sun path as Community Shaders reproduces it: sunrise is the mean of the sunrise begin and
+end less a quarter hour, sunset the mean of the sunset times plus a quarter hour, `phi = pi (hour -
+sunrise) / (sunset - sunrise)`, and the direction `(cos phi, -sin phi cos 95, sin phi sin 95)` in
+Skyrim axes (east at sunrise, 5 degrees off the zenith toward north at noon). `VanillaClearDay`'s sun
+is this at 12:00 for SkyrimClimate.
+
+### Placing references
+
+Code: [World/ReferencePlacement.cs](../src/SkyRender/World/ReferencePlacement.cs). A placed
+reference (REFR) is drawn as its base model's meshes with a `GlMesh.ModelTransform`, built from the
+record's position, rotation (radians) and scale:
+
+- **Rotation.** The engine builds the matrix with `NiMatrix3::SetEulerAnglesXYZ(x, y, z)`
+  (CommonLibSSE `NiMatrix3`), whose entries are `Rz(z) Ry(y) Rx(x)` transposed in the column-vector
+  sense. So the angles act clockwise (a heading of 90 degrees turns north to east) and Z is applied
+  first, then Y, then X (`ReferencePlacement.Rotation`). The order shows only on references tilted
+  about more than one axis.
+- **Below the root.** `NifMeshBuilder` composes every node up to and including the NIF's root, as a
+  character needs. A placed reference does not take the root node's own transform: a door whose root
+  turns it 90 degrees stands flush in its frame in game only without it. `ReadRootTransform(path)`
+  reads the root's transform and `ModelTransform(position, angles, scale, root)` undoes it before
+  the placement.
+- **Axes.** Positions are Skyrim world units, Z up; the matrix is in the renderer's Y-up mesh space
+  (`ToMeshSpace`: `(x, z, -y)`, the swap `NifMeshBuilder` applies). Billboard frames, shadows, alpha
+  sorting and the depth prepass all compose `ModelTransform`, so one parsed model serves every
+  reference of it.
 
 ### Grass
 
