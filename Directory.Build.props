@@ -12,7 +12,11 @@
     <Deterministic>true</Deterministic>
     <!-- Map this repo's absolute paths to /_/ in every compiled path (PDB location, source
          paths), so a CI build embeds no local folder names. The WPF project's markup pass does
-         not pick up ContinuousIntegrationBuild's mapping on its own. -->
+         not pick up ContinuousIntegrationBuild's mapping on its own.
+         One path escapes it: Fody, which weaves SkyRender.Character after compilation, rewrites
+         that DLL's debug directory with the absolute path of its PDB (Fody issue 1196). Release
+         packages are therefore built by the release workflow, whose checkout folder names nothing
+         local; a package built by hand should be built from a neutrally named folder. -->
     <PathMap Condition="'$(ContinuousIntegrationBuild)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=/_/</PathMap>
   </PropertyGroup>
 
@@ -33,5 +37,9 @@
 
   <ItemGroup Condition="'$(IsPackable)' != 'false'">
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+    <!-- The licence text and the third-party notices travel with the package (the licence is also
+         declared as an expression above). -->
+    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)NOTICE.md" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 </Project>
