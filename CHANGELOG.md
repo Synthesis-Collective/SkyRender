@@ -18,6 +18,16 @@
   `EffectUvScale/Offset` and `EffectTextureClampMode`. For any shape it also reports
   `BillboardMode`, the mode of its nearest `NiBillboardNode`. Effect billboards are drawn
   double-sided and their falloff is evaluated as if facing the camera.
+- Water follows the engine's water shader: the reflection is mixed over the lit body colour with
+  `lerp(1, fresnel, distanceFactor)` (Fresnel near the camera, a mirror beyond the water type's
+  noise falloff). New `WaterMaterial.ReflectsSky` (reflect `GlRenderer.SkyColor`, as the game does
+  with water reflections on), `NoiseFalloff` and `DepthFog` (`WaterDepthFog`: the above-water fog's
+  depth colour and refraction weight, so shallow water shows the ground). Without the new
+  properties the reflection is the water type's reflection colour times reflectivity; the earlier
+  ad hoc `fresnel x reflectivity x 4` mix toward sky x reflection colour is gone.
+- Distance fog (`GlRenderer.Fog`, `DistanceFog`): the engine's fog over every lit surface, from
+  host-supplied colours and distances. Off by default, so characters are unaffected.
+- Docs: a null `TerrainQuadrant.Base` draws white; the default landscape texture is a host fallback.
 - Docs: glow maps (`SLSF2_Glow_Map`) were already applied by `NifMaterialBinder`; the flag table
   and Stage 5 now say so.
 

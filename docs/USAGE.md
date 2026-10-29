@@ -254,9 +254,17 @@ terrain.AddTo(renderer);
 var water = GlWorldFactory.CreateWater(
     new WaterSurface(waterHeight, x0, y0, x1, y1,
         new WaterMaterial(shallowRgb, deepRgb, reflectionRgb, reflectivity, fresnel)
-        { NoiseTexturePath = @"textures\water\..." }),
+        {
+            NoiseTexturePath = @"textures\water\...",
+            ReflectsSky = true,                          // reflect renderer.SkyColor, as the game does
+            NoiseFalloff = noiseFalloff,                 // WATR noise falloff: near Fresnel, far mirror
+            DepthFog = new WaterDepthFog(fogNear, fogFar, fogAmount),  // WATR above-water fog
+        }),
     new TerrainHeightField(new[] { cell }), textures);
 renderer.AddMesh(water);
+
+// Optional distance fog over every lit surface (for an exterior, the weather's fog).
+renderer.Fog = new DistanceFog(fogNearRgb, fogFarRgb, near, far, power, max);
 ```
 
 Defaults match the game (blend and tiling were checked against in-game screenshots); see

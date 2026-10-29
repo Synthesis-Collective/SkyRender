@@ -1110,14 +1110,52 @@ the result, exactly as for any mesh.
 ### Water
 
 `WorldMeshBuilder.BuildWater` builds a grid (`WaterMaterial.GridResolution`, default 48 squares per
-side). Per vertex it stores the body colour, the shallow colour lerped to the deep colour by the
-depth to the ground over `ShallowBand` (no ground counts as deep), and the shore-alpha ramp. The
-sky reflection is added in `basic.vert` (`u_isWater`) from the **live** camera: Schlick Fresnel
-with F0 = the water type's Fresnel, scaled by reflectivity x 4, mixing toward
-`GlRenderer.SkyColor` (default `ClearColor`) times the water type's reflection colour. The first noise
-texture is bound as the wave normal map. Water is opaque by default, as the engine draws it.
+side). Per vertex it stores the body colour and an opacity, both from the depth to the ground (no
+ground counts as deep):
 
-Not modelled: reflection and refraction buffers, flow maps, the second and third noise layers.
+- **Without `DepthFog`**: shallow lerps to deep over `ShallowBand`, and opacity follows the
+  shore-alpha ramp (opaque by default).
+- **With `DepthFog`** (the water type's above-water fog near / far / amount): shallow lerps to deep
+  by depth / far, and opacity is the engine's refraction weight,
+  `1 - saturate((far - min(depth, far)) / (far - near)) ^ amount`, so the ground shows through
+  shallow water and the surface closes up by the fog's far distance. Community Shaders'
+  `Water.hlsl` uses the depth along the view ray and calls the divisor the fog range; SkyRender
+  uses the vertical depth per vertex and reads the range as far - near.
+
+The body colour is lit like any surface. The reflection is then mixed over the lit colour
+(`basic.vert` works out the fraction from the **live** camera, `basic.frag` mixes it), as
+`Water.hlsl` does:
+
+- **Reflection colour.** With `ReflectsSky`, `GlRenderer.SkyColor` (default `ClearColor`): with water
+  reflections on, the engine samples its reflection of the sky. Without it, the water type's
+  reflection colour times its reflectivity, the engine's term when reflections are off.
+- **Fraction.** `lerp(1, fresnel, distanceFactor)`, with Schlick Fresnel (F0 = the water type's
+  Fresnel) and `distanceFactor = saturate(lerp(w, 1, (d - 8192) / (noiseFalloff - 8192)))`, where d
+  is the distance to the camera. For vanilla rivers (noise falloff about 4000) that is Fresnel
+  near the camera and a mirror beyond 8192 units. `w` is a frame flag whose value the shader does
+  not show; SkyRender takes 0, which an in-game aerial of Riverwood bears out (the river reads as
+  the sky). `NoiseFalloff` 0 keeps the Fresnel blend at every distance.
+
+The first noise texture is bound as the wave normal map.
+
+Not modelled: reflection and refraction buffers (so no reflected scenery and no refraction
+offset), the sun specular, flow maps, the second and third noise layers.
+
+### Distance fog
+
+`GlRenderer.Fog` (a `DistanceFog`, null by default) fogs every lit surface last, after lighting and
+the water reflection, in the engine's form (Community Shaders' `Lighting.hlsl` and `Water.hlsl`):
+with d the distance from the camera, `f = min(max, saturate((d - near) / (far - near)) ^ power)`, and
+the colour moves to `lerp(nearColor, farColor, f)` by `f`. The shader takes the engine's packed
+parameters, `(near / range, 1 / range, power, max)`; how the engine fills the first two from a
+weather's near and far distances is not in the shader, and this reading of them is the natural one.
+A host supplies the colours and distances; for a Skyrim exterior they are the weather's fog near and
+far colours and its day or night fog distances, power and max. Effect-shader shapes are not fogged.
+Characters are unaffected unless a host sets it.
+
+Not modelled: the weather's image space (eye adaptation, cinematic brightness, contrast and tint).
+An in-game exterior reads about 1.6 to 2 times brighter than the same scene lit by its weather's
+sun and ambient colours alone, which is that pass.
 
 ### Trees (`SLSF2_Tree_Anim`)
 
