@@ -52,13 +52,16 @@ jobs:
           user: ${{ secrets.NUGET_USER }}
 
       # Core first: SkyRender.Character depends on it. Each push also uploads the .snupkg beside it.
+      # -Filter only understands * and ?, so the version digit is matched with -match instead.
       - name: Push SkyRender
         shell: pwsh
         run: |
-          $pkg = Get-ChildItem artifacts -Filter 'SkyRender.[0-9]*.nupkg' | Select-Object -First 1
+          $pkg = Get-ChildItem artifacts -Filter '*.nupkg' | Where-Object Name -match '^SkyRender\.\d' | Select-Object -First 1
+          if (-not $pkg) { throw "SkyRender .nupkg not found in artifacts" }
           dotnet nuget push $pkg.FullName --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
       - name: Push SkyRender.Character
         shell: pwsh
         run: |
-          $pkg = Get-ChildItem artifacts -Filter 'SkyRender.Character.[0-9]*.nupkg' | Select-Object -First 1
+          $pkg = Get-ChildItem artifacts -Filter '*.nupkg' | Where-Object Name -match '^SkyRender\.Character\.\d' | Select-Object -First 1
+          if (-not $pkg) { throw "SkyRender.Character .nupkg not found in artifacts" }
           dotnet nuget push $pkg.FullName --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
