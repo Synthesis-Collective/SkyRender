@@ -17,13 +17,14 @@ NPC of the game, with a Mutagen-backed `INpcMeshDataSource`.
 - [8. Terrain and water](#8-terrain-and-water)
 - [9. Configuration](#9-configuration)
 - [10. Threading and requirements](#10-threading-and-requirements)
+- [11. Troubleshooting](#11-troubleshooting)
 
 ## 1. Install
 
 ```xml
 <!-- Scenes, NIFs, offscreen rendering (net8.0) -->
 <PackageReference Include="SkyRender" Version="3.0.0" />
-<!-- NPCs, portraits and the WPF character viewer (net8.0-windows); includes SkyRender -->
+<!-- NPCs, portraits and the WPF character viewer (net8.0-windows10.0.19041.0); includes SkyRender -->
 <PackageReference Include="SkyRender.Character" Version="3.0.0" />
 ```
 
@@ -451,7 +452,10 @@ host sets wins.
 
 - Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
 - `SkyRender` targets `net8.0`; `SkyRender.Character` targets `net8.0-windows10.0.19041.0`
-  (WPF). Newer .NET versions consume both.
+  (WPF). Newer .NET versions consume both. A project that uses `SkyRender.Character` needs a
+  Windows platform version of at least 10.0.19041 in its target framework (for example
+  `net8.0-windows10.0.19041.0`), because its ReactiveUI.WPF dependency ships its modern .NET
+  build only for that platform; see [Troubleshooting](#11-troubleshooting).
 - All GL work happens on the thread that owns the context: your GL control's render callback, or
   the offscreen renderer's own thread. Parsing (`NifMeshBuilder`) and decoding (`AssetCache`) are
   GL-free and thread-safe.
@@ -461,3 +465,50 @@ host sets wins.
 
 See [RENDERING_PIPELINE.md](RENDERING_PIPELINE.md) for how the renderer works inside, and
 [CHARACTER_PIPELINE.md](CHARACTER_PIPELINE.md) for what the character tier adds.
+
+## 11. Troubleshooting
+
+### NU1202 when installing SkyRender.Character
+
+`Package SkyRender.Character is not compatible with net8.0-windows7.0` (or another plain
+`-windows` target, which is what the WPF project template writes) means the project's Windows
+platform version is below 10.0.19041. Raise it in the project file:
+
+```xml
+<TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+```
+
+The requirement comes from ReactiveUI.WPF 23.x, which ships its .NET 8/9/10 builds only for
+`windows10.0.19041`. Under a plain `-windows` target NuGet would fall back to its .NET Framework
+build (warning NU1701), so the character tier pins the platform to get the real one. The core
+`SkyRender` package has no such requirement.
+
+### Warning MSB3246: "Resolved file has a bad image, no metadata"
+
+Every project that references SkyRender, directly or through SkyRender.Character, reports this
+once. It comes from the niflysharp 1.3.0 package (SkyRender's NIF library): its `lib/net5.0`
+folder holds `niflycpp.dll`, a native DLL, next to the managed `nifly.dll`, so the build offers
+the native one to the compiler as a reference and warns that it has no .NET metadata. It is
+harmless: `niflycpp.dll` is still copied to the output folder, where `nifly.dll` loads it at run
+time.
+
+To silence it, either suppress the code:
+
+```xml
+<PropertyGroup>
+  <NoWarn>$(NoWarn);MSB3246</NoWarn>
+</PropertyGroup>
+```
+
+or, to keep MSB3246 for every other reference, drop just that file from the compile references
+(it stays in the output folder):
+
+```xml
+<Target Name="DropNiflyNativeReference" AfterTargets="ResolveLockFileReferences"
+        BeforeTargets="ResolveAssemblyReferences">
+  <ItemGroup>
+    <Reference Remove="@(Reference)"
+               Condition="'%(Reference.NuGetPackageId)' == 'niflysharp' and '%(Reference.Filename)%(Reference.Extension)' == 'niflycpp.dll'" />
+  </ItemGroup>
+</Target>
+```

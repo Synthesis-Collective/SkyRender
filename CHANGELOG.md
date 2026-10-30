@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.1
+
+Documentation only; the libraries are unchanged.
+
+- USAGE.md has a new Troubleshooting section:
+  - NU1202 when installing `SkyRender.Character` into a project with a plain `-windows` target.
+    The character tier needs a Windows platform version of at least 10.0.19041 (for example
+    `net8.0-windows10.0.19041.0`), because its ReactiveUI.WPF 23.x dependency ships its .NET 8/9/10
+    builds only for that platform.
+  - Warning MSB3246 ("PE image does not have metadata") in every project that references
+    SkyRender. It comes from the native `niflycpp.dll` that niflysharp 1.3.0 places in its `lib`
+    folder, is harmless, and can be silenced with `NoWarn` or with a target that drops only that
+    file from the compile references.
+- The install snippet and the requirements now state the character tier's full target framework.
+
 ## 3.0.0
 
 First public release. SkyRender is the renderer previously built from source as

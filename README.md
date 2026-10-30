@@ -94,7 +94,10 @@ adaptation; and clouds are not drawn. RENDERING_PIPELINE.md records each compari
 ## Platform
 
 - Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
-- The core is plain `net8.0`; the character tier needs WPF.
+- The core is plain `net8.0`; the character tier needs WPF and a Windows platform version of at
+  least 10.0.19041 in the host's target framework (for example `net8.0-windows10.0.19041.0`; a
+  plain `-windows` target gets NU1202). USAGE.md's Troubleshooting section explains this and the
+  harmless MSB3246 warning from the NIF library's native DLL.
 - GLSL shaders ship embedded in the assembly (and are also copied beside it for local builds), so
   the package works as a `PackageReference` with no extra setup.
 
