@@ -44,7 +44,7 @@ Offscreen rendering, NPC portraits and the interactive character viewer are cove
 
 ## Demo
 
-Two sample apps show the library at work:
+Three sample apps show the library at work:
 
 - [`samples/SkyRender.Demo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.Demo) is a minimal WPF viewer: choose **Open NIF…**,
   and it renders the mesh with its textures (resolved from the game's Data folder and archives),
@@ -53,10 +53,13 @@ Two sample apps show the library at work:
 - [`samples/SkyRender.CellDemo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.CellDemo) draws a whole interior or exterior cell of
   the installed game: terrain, water, grass, statics, effects, weather or cell lighting, and
   optionally distant LOD.
+- [`samples/SkyRender.CharacterDemo`](https://github.com/Synthesis-Collective/SkyRender/tree/main/samples/SkyRender.CharacterDemo) lists the NPCs of the installed game and
+  draws the one you pick with their default outfit, in the interactive character viewer.
 
 ```bash
 dotnet run --project samples/SkyRender.Demo
 dotnet run --project samples/SkyRender.CellDemo -c Release
+dotnet run --project samples/SkyRender.CharacterDemo -c Release
 ```
 
 The comparisons below put a SkyRender frame beside the game's own screenshot from the same camera

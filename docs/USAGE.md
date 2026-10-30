@@ -3,7 +3,9 @@
 This guide walks through the common tasks, from "show one NIF" to NPC portraits. The runnable
 version of sections 2-3 is the sample app in [`samples/SkyRender.Demo`](../samples/SkyRender.Demo);
 [`samples/SkyRender.CellDemo`](../samples/SkyRender.CellDemo) puts sections 7-8 together into a
-whole cell read from the game's plugins.
+whole cell read from the game's plugins, and
+[`samples/SkyRender.CharacterDemo`](../samples/SkyRender.CharacterDemo) does sections 5-6 for any
+NPC of the game, with a Mutagen-backed `INpcMeshDataSource`.
 
 - [1. Install](#1-install)
 - [2. Connect SkyRender to the game files](#2-connect-skyrender-to-the-game-files)
@@ -203,7 +205,15 @@ byte[] png = await portraits.RenderToPngAsync(new NpcRenderRequest
 
 ## 6. The interactive character viewer
 
-`VM_CharacterViewer` is a view model you host in your own GL control:
+`VM_CharacterViewer` is a view model you host in your own GL control. It is built on ReactiveUI,
+which (from version 20) the application must initialize once, before the first viewer is created;
+otherwise the constructor throws "ReactiveUI has not been initialized":
+
+```csharp
+// at startup, for example in App.OnStartup
+RxAppBuilder.CreateReactiveUIBuilder().WithWpf().BuildApp();   // namespace ReactiveUI.Builder
+```
+
 
 ```csharp
 var viewer = new VM_CharacterViewer(resolver, mySettings, previewCache, logGate, logger);

@@ -103,6 +103,8 @@ cells. The sections below describe the release as a whole.
   game (terrain, water, grass, weather or cell lighting, statics, effects, placed lights, optional
   distant LOD and neighbouring cells). It reads the game through Mutagen, a dependency of the
   sample only. Its 3D view fills its panel and follows the window's size.
+- `samples/SkyRender.CharacterDemo`: a WPF viewer for any NPC of the installed game, drawn with
+  their default outfit by the character tier, with a small Mutagen-backed `INpcMeshDataSource`.
 
 ### Breaking changes from CharacterViewer.Rendering 2.x
 

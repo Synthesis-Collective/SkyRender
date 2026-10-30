@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Character viewer: pick an NPC of the installed game and see them drawn with their default
+       outfit, under SkyRender.Character's studio lighting. The records and the load order come
+       through Mutagen, which only this sample references: the SkyRender packages stay free of it.
+       Not packed. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>SkyRender.CharacterDemo</RootNamespace>
+    <AssemblyName>SkyRender.CharacterDemo</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The character tier (VM_CharacterViewer, the NPC data types); it brings SkyRender in. -->
+    <ProjectReference Include="..\..\src\SkyRender.Character\SkyRender.Character.csproj" />
+    <!-- Hosts SkyRender's GL output in WPF. Same version SkyRender.Character uses. -->
+    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
+    <!-- The load order, the plugins' records and the BSA archives. The version the other samples
+         use; Mutagen 0.54 needs net9+, hence the net10 target. -->
+    <PackageReference Include="Mutagen.Bethesda" Version="0.54.2" />
+    <PackageReference Include="Mutagen.Bethesda.Skyrim" Version="0.54.2" />
+  </ItemGroup>
+</Project>
