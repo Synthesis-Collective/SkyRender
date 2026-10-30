@@ -48,9 +48,6 @@ public partial class MainWindow : Window
     private NpcResolution? _currentResolution;
     private Stopwatch? _loadClock;
     private long _resolveMs, _parseMs;
-    // The scene (identity key) the last outfit apply landed on: see Viewer_SceneCommitted.
-    private string? _outfitAppliedTo;
-    private bool _outfitReapplied;
 
     // Scripted runs (StartupOptions): the queue of NPCs to open and screenshots to take.
     private readonly Queue<string> _cycle = new();
@@ -232,7 +229,6 @@ public partial class MainWindow : Window
         var resolver = _resolver;
         _current = npc;
         _currentResolution = null;
-        _outfitReapplied = false;
         _settleFrames = -1;
         SelectedText.Text = npc.Title;
         WinnerText.Text = npc.Key + ", winning plugin " + npc.WinningPlugin;
@@ -275,9 +271,10 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // 2. The outfit is queued first, so it goes in with this NPC's scene and never on the
-            //    previous one; then the base character. LoadAsync parses on a worker thread and
-            //    returns once the scene is queued for the render callback.
+            // 2. The outfit is queued first, then the base character. The viewer keeps a queued
+            //    outfit for the newest load, so it goes in with this NPC's scene even when the
+            //    previous NPC's upload finishes in between. LoadAsync parses on a worker thread
+            //    and returns once the scene is queued for the render callback.
             var identity = new NpcIdentity(npc.Key.ToString(), npc.Title);
             viewer.ApplyMeshOverrides(resolution.Outfit);
             await viewer.LoadAsync(identity, resolution.Paths, externalCt: cts.Token);
@@ -301,30 +298,22 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>An outfit set went into the scene. Runs on the render callback (the UI thread),
-    /// just before <see cref="Viewer_SceneCommitted"/> when it drains with a new scene.</summary>
+    /// <summary>An outfit set went into the scene (the log names the NPC it went on).</summary>
     private void Viewer_MeshOverridesApplied()
-    {
-        _outfitAppliedTo = _viewer?.CurrentLoadedIdentityKey;
-        if (_outfitReapplied && _outfitAppliedTo == _current?.Key.ToString()) Dispatcher.BeginInvoke(Ready);
-    }
+        => _log.LogMessage($"  outfit applied to {_viewer?.CurrentLoadedIdentityKey} ({_viewer?.Renderer.Meshes.Count} meshes in the scene).");
 
     /// <summary>
-    /// A scene is installed. The viewer drains a queued outfit into whichever scene finishes
-    /// first, so when the previous NPC's install completes while this one's models are still being
-    /// read, this NPC's outfit lands on the previous scene (and is torn down with it). In that case
-    /// it is applied again here, onto the scene it belongs to, and <see cref="Ready"/> waits for it.
+    /// A scene is installed, with the outfit queued for it (the viewer drains it just before
+    /// raising this). Runs on the render callback (the UI thread). The previous NPC's scene can
+    /// finish installing while this one's models are still being read; the viewer raises this for
+    /// it too, with the outfit still queued for this NPC, so it is skipped here.
     /// </summary>
     private void Viewer_SceneCommitted()
     {
-        if (_viewer is not { } viewer || _current is not { } npc || _currentResolution is not { } resolution) return;
-        string key = npc.Key.ToString();
-        if (viewer.CurrentLoadedIdentityKey != key) return;   // an older NPC finishing
-        if (_outfitAppliedTo != key)
+        if (_viewer is not { } viewer || _current is not { } npc) return;
+        if (viewer.CurrentLoadedIdentityKey != npc.Key.ToString())
         {
-            _log.LogMessage("  the outfit went into the previous scene; applying it again.");
-            _outfitReapplied = true;
-            viewer.ApplyMeshOverrides(resolution.Outfit);   // drains on the next frame
+            _log.LogMessage($"  an earlier NPC's scene ({viewer.CurrentLoadedIdentityKey}) finished installing; still loading {npc.Title}.");
             return;
         }
         Dispatcher.BeginInvoke(Ready);
@@ -570,8 +559,8 @@ public partial class MainWindow : Window
         if (_cycle.Count > 0)
         {
             string next = _cycle.Dequeue();
-            // "!Npc" starts that load and picks the next NPC 200 ms later, while it is still
-            // loading: a cancellation test.
+            // "!Npc" starts that load and picks the next NPC 200 ms (--interrupt-ms) later, while
+            // it is still loading: a cancellation test.
             bool interrupt = next.StartsWith('!');
             if (interrupt) next = next[1..];
             Dispatcher.BeginInvoke(async () =>
@@ -580,7 +569,7 @@ public partial class MainWindow : Window
                 else { _log.LogError("NPC not found: " + next); AdvanceScript(); return; }
                 if (interrupt)
                 {
-                    await Task.Delay(200);
+                    await Task.Delay(_options.InterruptMs);
                     AdvanceScript();
                 }
             });

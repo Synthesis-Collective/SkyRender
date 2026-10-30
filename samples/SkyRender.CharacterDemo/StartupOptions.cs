@@ -15,6 +15,7 @@ namespace SkyRender.CharacterDemo;
 ///                       for example Belethor or 013BA1:Skyrim.esm)
 /// --cycle A;B;C         after the first NPC, open these in turn (a leading ! picks the next
 ///                       one 200 ms later, while that one is still loading): a switching test
+/// --interrupt-ms N      the delay after a ! entry before the next NPC is picked (default 200)
 /// --describe            log how each NPC resolves (skin, head, outfit pieces) without drawing it
 /// --require-outfit      only save a screenshot when the NPC's outfit has a body-slot (32) piece
 ///                       and every outfit mesh was found; otherwise log why and skip it
@@ -32,6 +33,7 @@ internal sealed class StartupOptions
     public string? LoadOrderFile { get; private set; }
     public string? Npc { get; private set; }
     public List<string> Cycle { get; } = new();
+    public int InterruptMs { get; private set; } = 200;
     public bool Describe { get; private set; }
     public bool RequireOutfit { get; private set; }
     public bool Portrait { get; private set; }
@@ -55,6 +57,7 @@ internal sealed class StartupOptions
                 case "--load-order": o.LoadOrderFile = Next(); break;
                 case "--npc": o.Npc = Next(); break;
                 case "--cycle": o.Cycle.AddRange(Next().Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)); break;
+                case "--interrupt-ms": o.InterruptMs = int.Parse(Next(), inv); break;
                 case "--describe": o.Describe = true; break;
                 case "--require-outfit": o.RequireOutfit = true; break;
                 case "--portrait": o.Portrait = true; break;

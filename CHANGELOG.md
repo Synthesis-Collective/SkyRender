@@ -133,3 +133,12 @@ cells. The sections below describe the release as a whole.
   library; hosts implement them on `IShapeDeformer` and `IRenderOverlay`.
 - `new GlRenderer()` now draws with the `Scene` profile. A host that relied on the old studio
   look passes `RenderProfile.Character`.
+
+### Fixes
+
+- `VM_CharacterViewer`: when the previous NPC's scene finished uploading while the next NPC was
+  still loading, that commit drained the overrides queued for the next NPC (its outfit, texture
+  overrides, a shape deformation) into the previous scene, where they were lost with it, and
+  dropped the rebuild gate early. Each load now carries a generation; a superseded commit leaves
+  the queues and the gate to the newer load, so overrides go in with the scene they were queued
+  for. `SceneCommitted` still fires for the superseded scene (`CurrentLoadedIdentityKey` names it).
