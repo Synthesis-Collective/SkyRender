@@ -28,6 +28,10 @@ internal sealed class NpcResolution
 
     public required IReadOnlyList<string> Trail { get; init; }
 
+    /// <summary>What could not be drawn as the game would, for example an outfit armor that gives
+    /// no piece for this race and gender, with the reason.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+
     /// <summary>Biped slot 32 (body) in the record's slot encoding, <c>1 &lt;&lt; (slot - 30)</c>.</summary>
     public const int BodySlotBit = 1 << 2;
 }
@@ -46,9 +50,12 @@ internal sealed class NpcResolution
 ///   supplies the value. A template that is a leveled NPC list (LVLN) resolves to its first entry:
 ///   the game rolls one at spawn time, the demo always shows the first.</item>
 ///   <item><b>Skin and body.</b> The NPC's worn armor (WNAM), else the race's skin (RACE WNAM). Each
-///   of its ArmorAddons (ARMA) that lists the NPC's race, or the race's armor race (RNAM), supplies
-///   the body (slot 32), hands (33), feet (37), tail (40) or hair (31 / 41) model for the NPC's gender,
-///   with the ARMA's skin texture set (NAM0 / NAM1) when it has one.</item>
+///   of its ArmorAddons (ARMA) for the NPC's race supplies the body (slot 32), hands (33), feet (37),
+///   tail (40) or hair (31 / 41) model for the NPC's gender, with the ARMA's skin texture set
+///   (NAM0 / NAM1) when it has one. As in the game, the skin only fills the slots the outfit leaves
+///   free: a skin ArmorAddon that shares the body slot with an outfit piece, or whose slots the
+///   outfit covers entirely, is left out (its texture set is kept, for the skin shapes that armor
+///   NIFs carry).</item>
 ///   <item><b>Head.</b> The FaceGen head the Creation Kit exports for the NPC,
 ///   <c>meshes\actors\character\facegendata\facegeom\&lt;plugin&gt;\&lt;formid&gt;.nif</c>, and its
 ///   tint, <c>textures\...\facetint\&lt;plugin&gt;\&lt;formid&gt;.dds</c>, named after the FormKey
@@ -57,8 +64,16 @@ internal sealed class NpcResolution
 ///   <item><b>Outfit.</b> The default outfit (DOFT): each item that is an armor, or a leveled item
 ///   list (LVLI) resolved to its first armor (all of them when the list has <i>Use All</i>), gives
 ///   one <see cref="MeshOverride"/> per ArmorAddon for the NPC's race and gender. Within one armor the
-///   first matching ArmorAddon wins a slot.</item>
+///   first matching ArmorAddon wins a slot. Two armors whose own biped slots overlap cannot both be
+///   worn: the demo keeps the later one (a choice of the demo; the game showed no fixed rule).
+///   Shields (slot 39) are left out, as weapons are.</item>
 /// </list>
+/// <para>An ArmorAddon is for a race when its race (RNAM) or one of its additional races (MODL) is
+/// that race or a race it borrows armor from (the race's armor race, RNAM, followed up the chain),
+/// as the engine's <c>TESObjectARMA::IsValidRace</c> checks. There is no fallback to the default
+/// race: an ArmorAddon for <c>DefaultRace</c> fits only the races it lists. Its world model for a
+/// female is the female model (MOD3), or the male model (MOD2) when the record has no female one
+/// ("If MOD3 is not present, MOD2 is both genders": UESP, Skyrim Mod File Format/ARMA).</para>
 /// <para>Not covered: the NPC's other inventory, items given by scripts or distributed at runtime,
 /// and leveled rolls other than the first entry.</para>
 /// <para>Mutagen's overlays are read by one thread at a time: every call takes a lock.</para>
@@ -66,10 +81,11 @@ internal sealed class NpcResolution
 internal sealed class NpcResolver : INpcMeshDataSource
 {
     private const int MaxTemplateDepth = 16;
-    // Slot bits, 1 << (slot - 30): head 30, hair 31, body 32, circlet 42.
+    // Slot bits, 1 << (slot - 30): head 30, hair 31, body 32, shield 39, circlet 42.
     private const int HeadSlotBit = 1 << 0;
     private const int HairSlotBit = 1 << 1;
     private const int CircletSlotBit = 1 << 12;
+    private const int ShieldSlotBit = 1 << 9;
 
     private readonly GameData _game;
     private readonly object _gate = new();
@@ -101,12 +117,42 @@ internal sealed class NpcResolver : INpcMeshDataSource
             bool female = traits.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Female);
             var gender = female ? NpcGender.Female : NpcGender.Male;
             var race = traits.Race.IsNull ? null : _game.Resolve<IRaceGetter>(traits.Race.FormKey);
-            FormKey? raceKey = race?.FormKey;
-            // The engine matches ArmorAddons against the race's armor race (RNAM) as well.
-            FormKey? armorRaceKey = race != null && !race.ArmorRace.IsNull && race.ArmorRace.FormKey != race.FormKey
-                ? race.ArmorRace.FormKey : null;
-            trail.Add($"race {race?.EditorID ?? "(none)"}, {gender}" +
-                (armorRaceKey is { } ar ? $", armor race {_game.Resolve<IRaceGetter>(ar)?.EditorID ?? ar.ToString()}" : ""));
+            // The engine matches ArmorAddons against the race and the races it borrows armor from
+            // (RNAM, followed up the chain).
+            var races = ArmorRaces(race);
+            trail.Add($"race {race?.EditorID ?? "(none)"}, {gender}" + (races is { Count: > 1 }
+                ? ", armor race " + string.Join(" -> ", races.Skip(1).Select(r => _game.Resolve<IRaceGetter>(r)?.EditorID ?? r.ToString()))
+                : ""));
+
+            // ---- outfit (first: the skin only fills the slots it leaves free) ----
+            var outfit = new List<MeshOverride>();
+            var warnings = new List<string>();
+            string? outfitName = null;
+            if (!inventory.DefaultOutfit.IsNull && _game.Resolve<IOutfitGetter>(inventory.DefaultOutfit.FormKey) is { } otft)
+            {
+                outfitName = otft.EditorID ?? otft.FormKey.ToString();
+                var armors = new List<IArmorGetter>();
+                foreach (var item in otft.Items ?? Array.Empty<Mutagen.Bethesda.Plugins.IFormLinkGetter<IOutfitTargetGetter>>())
+                    if (!item.IsNull) CollectArmors(item.FormKey, armors, depth: 0);
+                // Shields are left out, as weapons are: the game carries them on an attachment bone
+                // (the shield node of the skeleton) that the demo does not place, so the model would
+                // stand at the NPC's feet.
+                foreach (var shield in armors.Where(IsShield).Distinct().ToList())
+                    trail.Add($"outfit armor {Name(shield)} left out: a shield (slot 39), carried like a weapon");
+                armors.RemoveAll(IsShield);
+                foreach (var armor in WornArmors(armors, warnings))
+                {
+                    int before = outfit.Count;
+                    string why = AddOutfitPieces(armor, female, races, outfit);
+                    if (outfit.Count == before)
+                        warnings.Add($"outfit armor {Name(armor)} gives no piece: {why} (race {race?.EditorID ?? "(none)"}, {gender})");
+                }
+                trail.Add($"outfit {outfitName}: {string.Join(", ", armors.Select(Name).Distinct())}" +
+                    $" -> {outfit.Count} piece(s)");
+            }
+            else trail.Add("no default outfit");
+            int outfitSlots = 0;
+            foreach (var piece in outfit) outfitSlots |= piece.BipedSlots;
 
             // ---- skin and body: WNAM, else the race's skin ----
             IArmorGetter? skin = null;
@@ -124,18 +170,27 @@ internal sealed class NpcResolver : INpcMeshDataSource
             var chains = new Dictionary<string, string>();
             if (skin != null)
             {
-                foreach (var arma in ArmorAddonsFor(skin, raceKey, armorRaceKey))
+                foreach (var arma in ArmorAddonsFor(skin, races))
                 {
                     var flags = arma.BodyTemplate!.FirstPersonFlags;
                     string? model = WorldModelPath(arma, female);
                     if (model == null) continue;
                     var textures = SkinTextures(arma, female);
+                    bool covered = SkinCovered((int)flags, outfitSlots);
                     void Take(ref string? slot, string part)
                     {
-                        if (slot != null) return;
+                        if (slot != null || chains.ContainsKey(part)) return;
+                        // A covered part keeps its texture set: the skin shapes inside armor NIFs
+                        // take the race's skin from it.
+                        if (textures.Count > 0) txst[part] = textures;
+                        if (covered)
+                        {
+                            chains[part] = $"{skinSource} {skin!.EditorID} -> {arma.EditorID}: left out, the outfit covers its slots";
+                            trail.Add($"skin {part} ({arma.EditorID}) left out: the outfit covers its slots");
+                            return;
+                        }
                         slot = model;
                         chains[part] = $"{skinSource} {skin!.EditorID} -> {arma.EditorID} -> {model}";
-                        if (textures.Count > 0) txst[part] = textures;
                     }
                     if (flags.HasFlag(BipedObjectFlag.Body)) Take(ref body, "Body");
                     if (flags.HasFlag(BipedObjectFlag.Hands)) Take(ref hands, "Hands");
@@ -181,24 +236,7 @@ internal sealed class NpcResolver : INpcMeshDataSource
                 EyeShapeNames = EyeShapeNames(traits, race, female),
             };
 
-            // ---- outfit ----
-            var outfit = new List<MeshOverride>();
-            string? outfitName = null;
-            if (!inventory.DefaultOutfit.IsNull && _game.Resolve<IOutfitGetter>(inventory.DefaultOutfit.FormKey) is { } otft)
-            {
-                outfitName = otft.EditorID ?? otft.FormKey.ToString();
-                var armors = new List<IArmorGetter>();
-                foreach (var item in otft.Items ?? Array.Empty<Mutagen.Bethesda.Plugins.IFormLinkGetter<IOutfitTargetGetter>>())
-                    if (!item.IsNull) CollectArmors(item.FormKey, armors, depth: 0);
-                var seen = new HashSet<FormKey>();
-                foreach (var armor in armors)
-                    if (seen.Add(armor.FormKey)) AddOutfitPieces(armor, female, raceKey, armorRaceKey, outfit);
-                trail.Add($"outfit {outfitName}: {string.Join(", ", armors.Select(a => a.EditorID ?? a.FormKey.ToString()).Distinct())}" +
-                    $" -> {outfit.Count} piece(s)");
-            }
-            else trail.Add("no default outfit");
-
-            return new NpcResolution { Paths = paths, Outfit = outfit, OutfitName = outfitName, Trail = trail };
+            return new NpcResolution { Paths = paths, Outfit = outfit, OutfitName = outfitName, Trail = trail, Warnings = warnings };
         }
     }
 
@@ -242,21 +280,94 @@ internal sealed class NpcResolver : INpcMeshDataSource
 
     // ---- armor ----
 
+    /// <summary>The races an ArmorAddon may name for <paramref name="race"/> to wear it: the race
+    /// itself, then its armor race (RNAM), that race's armor race and so on, as the engine's
+    /// <c>TESObjectARMA::IsValidRace</c> follows them. Null when the NPC has no race (every
+    /// ArmorAddon is then taken).</summary>
+    private List<FormKey>? ArmorRaces(IRaceGetter? race)
+    {
+        if (race == null) return null;
+        var races = new List<FormKey> { race.FormKey };
+        var current = race;
+        for (int depth = 0; depth < MaxTemplateDepth; depth++)
+        {
+            if (current.ArmorRace.IsNull || races.Contains(current.ArmorRace.FormKey)) break;
+            races.Add(current.ArmorRace.FormKey);
+            if (_game.Resolve<IRaceGetter>(current.ArmorRace.FormKey) is not { } next) break;
+            current = next;
+        }
+        return races;
+    }
+
     /// <summary>The armor's ArmorAddons that this race wears: ARMA RNAM or one of its additional
-    /// races is the NPC's race or the race's armor race.</summary>
-    private IEnumerable<IArmorAddonGetter> ArmorAddonsFor(IArmorGetter armor, FormKey? race, FormKey? armorRace)
+    /// races is one of <paramref name="races"/> (see <see cref="ArmorRaces"/>).</summary>
+    private IEnumerable<IArmorAddonGetter> ArmorAddonsFor(IArmorGetter armor, IReadOnlyList<FormKey>? races)
+    {
+        foreach (var arma in ArmorAddons(armor))
+            if (races == null || races.Any(r => NamesRace(arma, r)))
+                yield return arma;
+    }
+
+    /// <summary>Every ArmorAddon of the armor that resolves and has biped slots.</summary>
+    private IEnumerable<IArmorAddonGetter> ArmorAddons(IArmorGetter armor)
     {
         foreach (var link in armor.Armature)
-        {
-            if (link.IsNull || _game.Resolve<IArmorAddonGetter>(link.FormKey) is not { BodyTemplate: not null } arma) continue;
-            if (race == null || NamesRace(arma, race.Value) || (armorRace is { } a && NamesRace(arma, a)))
+            if (!link.IsNull && _game.Resolve<IArmorAddonGetter>(link.FormKey) is { BodyTemplate: not null } arma)
                 yield return arma;
-        }
     }
 
     private static bool NamesRace(IArmorAddonGetter arma, FormKey race)
         => (!arma.Race.IsNull && arma.Race.FormKey == race)
            || arma.AdditionalRaces.Any(r => !r.IsNull && r.FormKey == race);
+
+    /// <summary>
+    /// Whether the outfit leaves no room for a skin ArmorAddon on <paramref name="skinSlots"/>. The
+    /// game fills a biped slot from the skin (WNAM) only when no worn armor occupies it: a skin
+    /// ArmorAddon that shares the body slot with the outfit, or whose slots the outfit covers
+    /// entirely, is not worn. The skin torso (32, 34, 35, 36, 38) under a cuirass (32, 34, 38) is
+    /// left out by the first rule; the feet (37) under boots (37, 38) and the hands (33) under
+    /// gauntlets (33, 34) by the second. The torso stays with boots alone, which share only the
+    /// calves (38). The same rule as OpenMW's ESM4 NPC renderer (<c>esm4npcanimation.cpp</c>).
+    /// </summary>
+    private static bool SkinCovered(int skinSlots, int outfitSlots)
+        => (skinSlots & outfitSlots & NpcResolution.BodySlotBit) != 0
+           || (skinSlots != 0 && (skinSlots & ~outfitSlots) == 0);
+
+    /// <summary>
+    /// The armors of the outfit that are worn together, in outfit order. An armor occupies the
+    /// biped slots of its own record (BOD2): two armors whose slots overlap cannot both be equipped,
+    /// so the demo keeps the later one. That is a choice of the demo, not the game's rule: a Use All
+    /// list can give two helmets this way (Stormcloak sets with a hide helmet and a full helmet), and
+    /// in game the helmet a soldier wore changed from spawn to spawn.
+    /// </summary>
+    private static List<IArmorGetter> WornArmors(List<IArmorGetter> armors, List<string> warnings)
+    {
+        var worn = new List<IArmorGetter>();
+        var seen = new HashSet<FormKey>();
+        foreach (var armor in armors)
+        {
+            if (!seen.Add(armor.FormKey)) continue;
+            int slots = (int)(armor.BodyTemplate?.FirstPersonFlags ?? 0);
+            for (int i = worn.Count - 1; i >= 0; i--)
+            {
+                int other = (int)(worn[i].BodyTemplate?.FirstPersonFlags ?? 0);
+                if ((slots & other) == 0) continue;
+                warnings.Add($"outfit armor {Name(worn[i])} is replaced by {Name(armor)}: both occupy slot(s) {SlotNames(slots & other)}");
+                worn.RemoveAt(i);
+            }
+            worn.Add(armor);
+        }
+        return worn;
+    }
+
+    private static string Name(IArmorGetter armor) => armor.EditorID ?? armor.FormKey.ToString();
+
+    /// <summary>An armor whose own biped slots (BOD2) include the shield slot, 39.</summary>
+    private static bool IsShield(IArmorGetter armor)
+        => ((int)(armor.BodyTemplate?.FirstPersonFlags ?? 0) & ShieldSlotBit) != 0;
+
+    private static string SlotNames(int slots)
+        => string.Join(",", Enumerable.Range(0, 32).Where(b => (slots & (1 << b)) != 0).Select(b => (b + 30).ToString()));
 
     /// <summary>Armors an outfit item stands for: an armor, or a leveled item list's first armor (every
     /// entry's, when the list has Use All), through nested lists.</summary>
@@ -283,14 +394,23 @@ internal sealed class NpcResolver : INpcMeshDataSource
     /// <summary>One mesh override per ArmorAddon of <paramref name="armor"/> for this race and gender.
     /// Pieces on the head (30) or circlet (42) slots are headgear, as are hoods on the hair slot (31):
     /// they hide the hair but never the face. Everything else hides the slots it occupies, so the
-    /// body, hands and feet under it are not drawn, as in the game.</summary>
-    private void AddOutfitPieces(IArmorGetter armor, bool female, FormKey? race, FormKey? armorRace, List<MeshOverride> outfit)
+    /// body, hands and feet under it are not drawn, as in the game. Returns why the armor gave no
+    /// piece, for the log (meaningful only when it added none).</summary>
+    private string AddOutfitPieces(IArmorGetter armor, bool female, IReadOnlyList<FormKey>? races, List<MeshOverride> outfit)
     {
+        var all = ArmorAddons(armor).ToList();
+        if (all.Count == 0) return "it has no ArmorAddon with biped slots";
+        var forRace = ArmorAddonsFor(armor, races).ToList();
+        if (forRace.Count == 0)
+            return $"none of its ArmorAddons ({string.Join(", ", all.Select(a => a.EditorID ?? a.FormKey.ToString()))}) lists the race or its armor race";
+        string why = $"its ArmorAddons for the race ({string.Join(", ", forRace.Select(a => a.EditorID ?? a.FormKey.ToString()))}) have no {(female ? "female or male" : "male")} world model";
+
         int taken = 0;
-        foreach (var arma in ArmorAddonsFor(armor, race, armorRace))
+        foreach (var arma in forRace)
         {
             int slots = (int)arma.BodyTemplate!.FirstPersonFlags;
-            if (slots == 0 || (slots & taken) != 0) continue;   // the first matching ArmorAddon wins a slot
+            if (slots == 0) { why = $"its ArmorAddon {arma.EditorID} has no biped slots"; continue; }
+            if ((slots & taken) != 0) continue;   // the first matching ArmorAddon wins a slot
             string? model = WorldModelPath(arma, female);
             if (model == null) continue;
             taken |= slots;
@@ -316,12 +436,19 @@ internal sealed class NpcResolver : INpcMeshDataSource
                 HasWeightVariants = female ? arma.WeightSliderEnabled.Female : arma.WeightSliderEnabled.Male,
             });
         }
+        return why;
     }
 
     // ---- models and textures ----
 
+    /// <summary>The ArmorAddon's world model for the gender: the female model (MOD3), or the male
+    /// model (MOD2) when the record has none, which then serves both genders (UESP's ARMA format
+    /// notes). Vanilla's Stormcloak boots and full helmet have only a male model.</summary>
+    private static IModelGetter? WorldModel(IArmorAddonGetter arma, bool female)
+        => female ? arma.WorldModel?.Female ?? arma.WorldModel?.Male : arma.WorldModel?.Male;
+
     private static string? WorldModelPath(IArmorAddonGetter arma, bool female)
-        => ModelPath((female ? arma.WorldModel?.Female : arma.WorldModel?.Male)?.File.GivenPath);
+        => ModelPath(WorldModel(arma, female)?.File.GivenPath);
 
     /// <summary>A record's model path is relative to <c>meshes\</c>; the renderer takes Data-relative paths.</summary>
     private static string? ModelPath(string? given)
@@ -346,7 +473,7 @@ internal sealed class NpcResolver : INpcMeshDataSource
     private List<AlternateTextureSpec> AlternateTextures(IArmorAddonGetter arma, bool female)
     {
         var specs = new List<AlternateTextureSpec>();
-        var model = female ? arma.WorldModel?.Female : arma.WorldModel?.Male;
+        var model = WorldModel(arma, female);
         if (model?.AlternateTextures is not { Count: > 0 } alternates) return specs;
         foreach (var alt in alternates)
         {

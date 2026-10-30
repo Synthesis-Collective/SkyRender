@@ -47,6 +47,7 @@ internal sealed class DemoLog : IRenderLogger
 
     public void Info(string message) => Write("INFO ", message);
     public void LogMessage(string message) => Write("     ", message);
+    public void Warn(string message) => Write("WARN ", message);
     public void LogError(string message) => Write("ERROR", message);
     public void LogError(string message, Exception ex) => Write("ERROR", message + ": " + ex);
 

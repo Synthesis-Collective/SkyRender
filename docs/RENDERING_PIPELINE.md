@@ -387,6 +387,10 @@ All four carry partition 230 and were elected via the partition-based path. A na
 
 NifSkope's `Node::isHidden()` only checks `flags.node.hidden` (the AppCulled bit) and walks the parent chain. `Mesh::isHidden()` extends that with "no `TexturingProperty` and no `BSShaderLightingProperty`." There is **zero** partition-based or biped-slot-based filtering in NifSkope's GL pipeline — the only references to `BSDismemberSkinInstance` in NifSkope source are in `spells/skeleton.cpp` for skinning operations, not rendering.
 
+#### Per-triangle partitions (host-hidden)
+
+A shape whose triangles span two or more hideable partitions also gets `BuiltMesh.TrianglePartitionSlots`: one biped slot per triangle, from nifly's `GetShapePartitions` (partition list plus each triangle's partition index, in `GetTriangles` order). IDs 30-61 keep their slot, 130-161 fold down by 100, all others (the 230 head range, legacy IDs, caps) are 0 and never hidden (`NifMeshBuilder.PartitionToHideableSlot`). `GlMeshFactory` copies the table to `GlMesh.TrianglePartitionSlots`. A host sets `GlMesh.HiddenPartitionSlots` (a BipedObjectFlag mask); at the start of each `GlRenderer.Render` every mesh whose mask changed re-uploads its index buffer without those triangles, in the original order (`GlMesh.ApplyHiddenPartitionSlots`), so all passes draw the reduced set. The mask defaults to 0, which keeps the original buffer: only the character tier sets it (see CHARACTER_PIPELINE.md, "Dismember partitions inside a shape").
+
 Practical consequence: opening `ChildFeet.nif` directly in NifSkope renders the `ChildHead` / `EyesChild` / `MouthChild` placeholders along with the Feet shape, all visible. NifSkope is a single-file editor with no concept of biped slots or ARMA composition — it has no information that would let it decide a shape "doesn't belong" in a given context. This renderer needs the same information NifSkope lacks (the body-part label the host loaded the NIF under), threaded through `BuildFromFile`'s `bipedBodyPart` parameter.
 
 ### Shader flag inventory

@@ -34,6 +34,10 @@ cells. The sections below describe the release as a whole.
 - NPC assembly from host-resolved paths (`ResolvedNpcMeshPaths`): FaceGen heads and face tints,
   body parts, worn meshes with biped-slot occupancy (`MeshOverride`), replacement textures, and a
   skeleton.
+- Worn pieces hide each other's dismember partitions per triangle, as the game does: a cuirass's
+  own calf partition (38) is not drawn under boots that take slot 38 (`PartitionOcclusion`,
+  `BuiltMesh.TrianglePartitionSlots`, `GlMesh.HiddenPartitionSlots`). Checked in game against an
+  Imperial soldier in the light cuirass and boots.
 - NPC portraits offscreen (`NpcOffscreenRendererFactory`, `NpcRenderRequest`, `CameraFraming`,
   `PrewarmAsync`).
 - The interactive viewer view model `VM_CharacterViewer` with two WPF panels

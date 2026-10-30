@@ -247,7 +247,9 @@ Forward mouse input to `viewer.Camera` as in section 3. The two WPF panels
 - **Your own data on a mesh or viewer.** `GlMesh.HostData` and `VM_CharacterViewer.HostData` hold
   any object you like; the renderer never reads them.
 - **Hiding meshes.** `GlMesh.IsHiddenByHost` hides a mesh without disturbing the renderer's own
-  missing-texture handling.
+  missing-texture handling. `GlMesh.HiddenPartitionSlots` hides only the triangles of the given
+  dismember-partition slots (a `1 << (slot - 30)` mask), for shapes that carry
+  `TrianglePartitionSlots`; the character viewer sets it from the worn pieces.
 
 ## 8. Terrain and water
 

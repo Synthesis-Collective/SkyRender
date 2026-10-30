@@ -50,20 +50,41 @@ character, a `MeshOverride` per outfit piece):
   height and FaceGen come from the template; with *Inventory*, the default outfit. Chains are
   followed to the NPC that supplies the value.
 - **Skin and body.** The NPC's worn armor (WNAM), else the race's skin. Its armor addons for the
-  NPC's race (or the race's armor race) and gender give the body, hands, feet, tail and hair models,
-  with their skin texture sets.
+  NPC's race (or the races it borrows armor from, the armor race chain) and gender give the body,
+  hands, feet, tail and hair models, with their skin texture sets. As in the game, the skin only
+  fills the slots the outfit leaves free: under a cuirass, boots or gauntlets the skin torso, feet
+  or hands are not loaded at all.
 - **Head.** The FaceGen head the Creation Kit exports,
   `meshes\actors\character\facegendata\facegeom\<plugin>\<formid>.nif`, and its tint texture. The
   FaceGen NIF holds the head parts; their records only tell the renderer which shapes are eyes.
 - **Outfit.** The default outfit (DOFT): every armor, with one mesh override per armor addon for the
-  NPC's race and gender. Outfit pieces hide what is under them (body, hands, feet), and hoods and
-  helmets hide the hair, as in the game.
+  NPC's race and gender. An armor addon with no female model gives its male model to women too
+  (vanilla's Stormcloak boots are one). Hoods and helmets hide the hair, as in the game. An outfit
+  armor that gives no piece is logged as a warning with the reason.
+- **Partitions.** SkyRender.Character hides the dismember partitions one worn piece covers on
+  another, as the game does: the calf partition (38) of a cuirass's own skin shape is not drawn
+  under boots that take slot 38. Checked in game with an Imperial soldier in the light cuirass and
+  light boots: no skin shows on or through the boot.
 
 ## What it does not draw
 
 - **Leveled lists are not rolled.** A leveled item in the outfit gives its first armor (every
-  entry's, when the list has *Use All*); a leveled NPC template gives its first NPC. The game picks
-  at random, so an NPC that wears or is drawn from a leveled list can look different in game.
+  entry's, when the list has *Use All*); a leveled NPC template gives its first NPC. The game rolls
+  these at random each time an NPC spawns, so an NPC that wears or is drawn from a leveled list can
+  look different in game. Spawned 18 times in game, a Stormcloak soldier
+  (CWFort04SoldierCommanderSons) wore the full Stormcloak helmet 12 times, the hide helmet 3 times
+  and a scaled helmet 3 times; the demo always draws the same one. The boots were always worn.
+- **Two armors on one slot: the later one is worn.** When the outfit gives two armors whose slots
+  overlap (a *Use All* list with a hide helmet and a full helmet, say), the demo keeps the later one
+  and logs the other as replaced. This is a choice of the demo so that the drawing is repeatable,
+  not the game's behaviour: in game the helmet changed from spawn to spawn, with no fixed rule.
+- **Shields are left out**, as weapons are. The game carries a shield on the skeleton's shield
+  node; the demo does not place attachments, so a shield would stand at the NPC's feet. The log
+  notes each shield it leaves out (Lydia's steel shield is one).
+- **Partitions shared by two pieces.** When two worn pieces both list a slot (a cuirass and boots
+  both list 38), the piece that occupies fewer slots keeps that slot's partition and the other
+  loses it. That matches the boots and the cuirass in game; it is a rule chosen by SkyRender, not
+  one documented for the engine.
 - **Only the default outfit.** The NPC's other inventory, items equipped by scripts, distributed
   at runtime or carried in the hands (weapons) are not drawn.
 - **Vanilla shapes only.** Meshes are drawn as they ship, at the NPC's weight; no body-shape

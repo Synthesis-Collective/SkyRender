@@ -258,6 +258,7 @@ public partial class MainWindow : Window
             }
             _currentResolution = resolution;
             foreach (var step in resolution.Trail) _log.LogMessage("  " + step);
+            foreach (var warning in resolution.Warnings) _log.Warn("  " + warning);
             foreach (var piece in resolution.Outfit)
                 _log.LogMessage($"  outfit piece {piece.Key}: {piece.MeshPath} (slots {SlotList(piece.BipedSlots)})");
             OutfitText.Text = resolution.OutfitName is { } o
@@ -335,6 +336,10 @@ public partial class MainWindow : Window
         _log.Info(StatusText.Text);
         _log.Info($"  memory: managed {GC.GetTotalMemory(false) / 1048576.0:0} MB, private {proc.PrivateMemorySize64 / 1048576.0:0} MB; " +
             $"{viewer.Renderer.Meshes.Count} meshes in the renderer.");
+        // Every shape in the scene, and whether it is drawn: a shape an outfit piece hides (its
+        // biped slot is covered) is listed as hidden.
+        foreach (var mesh in viewer.Renderer.Meshes)
+            _log.LogMessage($"  mesh {mesh.ShapeName} [{mesh.BodyPart}]" + (mesh.ShouldRender ? "" : mesh.IsHiddenByHost ? " (hidden by an outfit piece)" : " (not drawn)"));
         foreach (var m in viewer.MissingMeshPaths) _log.LogMessage("  model not found: " + m);
         foreach (var w in viewer.MeshOverrideWarnings) _log.LogMessage("  outfit: " + w);
         foreach (var t in viewer.MissingTexturePaths.Take(10)) _log.LogMessage("  texture not found: " + t);
