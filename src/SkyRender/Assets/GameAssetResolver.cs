@@ -45,12 +45,35 @@ public sealed record AssetSource(
     /// <see cref="AssetSource"/>, so warm resolves report identically to cold ones.
     /// </summary>
     public bool ViaDataFolderFallback { get; init; }
+
+    /// <summary>
+    /// True when this BSA asset is served from memory (the host implements
+    /// <see cref="IBsaArchiveByteReader"/>): <see cref="ResolvedDiskPath"/> is then a stable key
+    /// shaped like a cache path, but no file exists there. Read it through
+    /// <see cref="GameAssetResolver.OpenResolvedRead"/>.
+    /// </summary>
+    public bool IsInMemory { get; init; }
 }
+
+/// <summary>Snapshot of <see cref="GameAssetResolver.GetBsaAssetStats"/>.</summary>
+public sealed record BsaAssetStats(
+    bool InMemoryMode,
+    long Materialized,
+    long MaterializeFailures,
+    long MaterializedBytes,
+    double MaterializeMs,
+    long StoreHits,
+    long ReReads,
+    long ReReadBytes,
+    double ReReadMs,
+    long StoreResidentBytes);
 
 /// <summary>
 /// Resolves game-relative asset paths (e.g. "meshes/actors/character/...")
 /// to actual file paths on disk. Checks loose files first, then falls back
-/// to BSA archive extraction with a persistent temp cache.
+/// to BSA archives: extracted into a cache folder, or, when the provider also
+/// implements <see cref="IBsaArchiveByteReader"/>, served from memory under a
+/// path-shaped key (see <see cref="AssetSource.IsInMemory"/>).
 /// </summary>
 public class GameAssetResolver
 {
@@ -111,6 +134,36 @@ public class GameAssetResolver
     private readonly ConditionalWeakTable<IReadOnlyList<RenderScope>, string> _scopeSetSigCache = new();
 
     private readonly string _extractionDir;
+
+    /// <summary>The host's byte reader when its provider also implements
+    /// <see cref="IBsaArchiveByteReader"/>; null keeps disk extraction.</summary>
+    private readonly IBsaArchiveByteReader? _byteReader;
+
+    /// <summary>In-memory BSA assets by resolved path: where to re-read the bytes after the
+    /// <see cref="_memoryStore"/> evicts them, and the archive's write time (the stand-in file
+    /// time the NIF parse cache keys on). Populated once per (BSA, path) at resolve time.</summary>
+    private readonly ConcurrentDictionary<string, MemoryAsset> _memoryAssets =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly record struct MemoryAsset(string BsaPath, string Subpath, long BsaWriteTicks);
+
+    private BsaMemoryStore? _memoryStoreInstance;
+    private BsaMemoryStore MemoryStore =>
+        LazyInitializer.EnsureInitialized(ref _memoryStoreInstance, () => new BsaMemoryStore(InMemoryAssetBudgetBytes));
+
+    /// <summary>
+    /// Forces BSA assets to be extracted to the cache directory even when the host's provider
+    /// implements <see cref="IBsaArchiveByteReader"/>. Default false: a host that can supply bytes
+    /// gets in-memory serving. Set once at construction.
+    /// </summary>
+    public bool ExtractBsaAssetsToDisk { get; init; }
+
+    /// <summary>Byte budget for recently read in-memory BSA files (default 128 MB). Files are
+    /// re-read from the archive after eviction, so this bounds RAM, not correctness.</summary>
+    public long InMemoryAssetBudgetBytes { get; init; } = 128L * 1024 * 1024;
+
+    /// <summary>True when BSA assets are served from memory rather than extracted.</summary>
+    public bool ServesBsaAssetsFromMemory => _byteReader != null && !ExtractBsaAssetsToDisk;
 
     /// <summary>
     /// Per-(BSA, normalized-path) lock objects so concurrent resolutions for
@@ -230,6 +283,7 @@ public class GameAssetResolver
     {
         _dataFolder = dataFolder;
         _bsaProvider = bsaProvider;
+        _byteReader = bsaProvider as IBsaArchiveByteReader;
         _logGate = logGate;
         _logger = logger;
 
@@ -258,6 +312,179 @@ public class GameAssetResolver
     /// extracted last to subsequent renders of either source).</summary>
     private string MakeExtractionDestPath(string bsaPath, string normalized)
         => Path.Combine(_extractionDir, GetBsaPathToken(bsaPath), normalized);
+
+    /// <summary>Resolved path for an in-memory asset. Under its own <c>memory</c> folder that is
+    /// never written, so <see cref="File.Exists"/> on it is consistently false: a host reading the
+    /// path directly fails every time instead of only when no stale extraction from an earlier
+    /// session happens to sit at the extraction path.</summary>
+    private string MakeMemoryPath(string bsaPath, string normalized)
+        => Path.Combine(_extractionDir, "memory", GetBsaPathToken(bsaPath), normalized);
+
+    private bool IsUnderMemoryRoot(string path) =>
+        path.StartsWith(Path.Combine(_extractionDir, "memory") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The resolved path a BSA asset gets in the current mode.</summary>
+    private string MakeBsaAssetPath(string bsaPath, string normalized)
+        => ServesBsaAssetsFromMemory ? MakeMemoryPath(bsaPath, normalized) : MakeExtractionDestPath(bsaPath, normalized);
+
+    /// <summary>Makes a located BSA file available at <paramref name="destPath"/>: extracts it,
+    /// or in memory mode reads it once (so a located-but-unreadable file still fails at resolve
+    /// time, as an extraction failure does) and registers it for later reads.</summary>
+    private bool TryMaterializeBsaAsset(string containingBsaPath, string bsaSubpath, string destPath, out string? error)
+    {
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return TryMaterializeBsaAssetCore(containingBsaPath, bsaSubpath, destPath, out error); }
+        finally { Interlocked.Add(ref _statMaterializeTicks, System.Diagnostics.Stopwatch.GetTimestamp() - t0); }
+    }
+
+    private bool TryMaterializeBsaAssetCore(string containingBsaPath, string bsaSubpath, string destPath, out string? error)
+    {
+        if (!ServesBsaAssetsFromMemory)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+            if (!_bsaProvider.TryExtractToDisk(containingBsaPath, bsaSubpath, destPath, out error))
+            {
+                Interlocked.Increment(ref _statMaterializeFailures);
+                return false;
+            }
+            Interlocked.Increment(ref _statMaterialized);
+            try { Interlocked.Add(ref _statMaterializedBytes, new FileInfo(destPath).Length); } catch { }
+            return true;
+        }
+
+        if (!TryReadFromArchive(containingBsaPath, bsaSubpath, out byte[] bytes, out error))
+        {
+            Interlocked.Increment(ref _statMaterializeFailures);
+            return false;
+        }
+        Interlocked.Increment(ref _statMaterialized);
+        Interlocked.Add(ref _statMaterializedBytes, bytes.LongLength);
+        long writeTicks;
+        try { writeTicks = File.GetLastWriteTimeUtc(containingBsaPath).Ticks; }
+        catch { writeTicks = 0; }
+        _memoryAssets[destPath] = new MemoryAsset(containingBsaPath, bsaSubpath, writeTicks);
+        MemoryStore.Put(destPath, bytes);
+        return true;
+    }
+
+    private bool TryReadFromArchive(string containingBsaPath, string bsaSubpath, out byte[] bytes, out string? error)
+    {
+        bytes = Array.Empty<byte>();
+        try
+        {
+            if (!_byteReader!.TryReadBytes(containingBsaPath, bsaSubpath, out byte[]? read, out error)) return false;
+            if (read == null) { error = "reader returned no bytes"; return false; }
+            bytes = read;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.ToString();
+            return false;
+        }
+    }
+
+    /// <summary>True when <paramref name="resolvedPath"/> is an in-memory BSA asset of this
+    /// resolver (no file exists at that path).</summary>
+    public bool IsInMemoryPath(string? resolvedPath) =>
+        resolvedPath != null && _memoryAssets.ContainsKey(resolvedPath);
+
+    /// <summary><see cref="File.Exists"/> that also knows this resolver's in-memory assets. Use it
+    /// for any path that came from <see cref="ResolveAssetSource"/>.</summary>
+    public bool AssetFileExists(string? resolvedPath) =>
+        resolvedPath != null && (_memoryAssets.ContainsKey(resolvedPath) || File.Exists(resolvedPath));
+
+    /// <summary>Opens a resolved path for reading: a read-only stream over an in-memory asset's
+    /// bytes, or <see cref="File.OpenRead"/>. Throws like <see cref="File.OpenRead"/> when the
+    /// asset can't be read.</summary>
+    public Stream OpenResolvedRead(string resolvedPath)
+    {
+        if (_memoryAssets.ContainsKey(resolvedPath))
+            return new MemoryStream(ReadResolvedBytesShared(resolvedPath), writable: false);
+        return File.OpenRead(resolvedPath);
+    }
+
+    /// <summary>Reads a resolved path's whole contents into a new array (in-memory asset or file).
+    /// Throws like <see cref="File.ReadAllBytes"/> when it can't be read.</summary>
+    public byte[] ReadResolvedBytes(string resolvedPath)
+    {
+        if (_memoryAssets.ContainsKey(resolvedPath))
+            return (byte[])ReadResolvedBytesShared(resolvedPath).Clone();
+        return File.ReadAllBytes(resolvedPath);
+    }
+
+    /// <summary>Like <see cref="ReadResolvedBytes"/>, but an in-memory asset's array is the cached
+    /// one, shared with other readers: callers must not modify it.</summary>
+    internal byte[] ReadResolvedBytesShared(string resolvedPath)
+    {
+        if (!_memoryAssets.TryGetValue(resolvedPath, out var asset))
+            return File.ReadAllBytes(resolvedPath);
+        if (MemoryStore.TryGet(resolvedPath, out byte[] cached))
+        {
+            Interlocked.Increment(ref _statStoreHits);
+            return cached;
+        }
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool ok = TryReadFromArchive(asset.BsaPath, asset.Subpath, out byte[] bytes, out string? error);
+        Interlocked.Add(ref _statReReadTicks, System.Diagnostics.Stopwatch.GetTimestamp() - t0);
+        if (!ok)
+            throw new IOException("SkyRender: re-reading '" + asset.Subpath + "' from '" + asset.BsaPath +
+                "' failed: " + (error ?? "(no detail)"));
+        Interlocked.Increment(ref _statReReads);
+        Interlocked.Add(ref _statReReadBytes, bytes.LongLength);
+        MemoryStore.Put(resolvedPath, bytes);
+        return bytes;
+    }
+
+    private long _statMaterialized, _statMaterializeFailures, _statMaterializedBytes, _statMaterializeTicks;
+    private long _statStoreHits, _statReReads, _statReReadBytes, _statReReadTicks;
+
+    /// <summary>
+    /// Process-lifetime counters for BSA asset serving, for comparing in-memory serving against disk
+    /// extraction (flip <see cref="ExtractBsaAssetsToDisk"/> between runs). "Materialize" is the
+    /// once-per-(BSA, path) resolve-time step: an extraction to disk, or the first read into memory.
+    /// Store hits / re-reads only occur in memory mode: a re-read is an archive read after the
+    /// <see cref="InMemoryAssetBudgetBytes"/> store evicted the file. Not reset by
+    /// <see cref="ClearExtractedFiles"/>.
+    /// </summary>
+    public BsaAssetStats GetBsaAssetStats()
+    {
+        double freq = System.Diagnostics.Stopwatch.Frequency;
+        return new BsaAssetStats(
+            ServesBsaAssetsFromMemory,
+            Interlocked.Read(ref _statMaterialized),
+            Interlocked.Read(ref _statMaterializeFailures),
+            Interlocked.Read(ref _statMaterializedBytes),
+            Interlocked.Read(ref _statMaterializeTicks) * 1000.0 / freq,
+            Interlocked.Read(ref _statStoreHits),
+            Interlocked.Read(ref _statReReads),
+            Interlocked.Read(ref _statReReadBytes),
+            Interlocked.Read(ref _statReReadTicks) * 1000.0 / freq,
+            _memoryStoreInstance?.ResidentBytes ?? 0);
+    }
+
+    /// <summary>Byte length of a resolved path (in-memory asset or file), -1 when it can't be
+    /// read.</summary>
+    public long GetResolvedLength(string resolvedPath)
+    {
+        try
+        {
+            return _memoryAssets.ContainsKey(resolvedPath)
+                ? ReadResolvedBytesShared(resolvedPath).LongLength
+                : new FileInfo(resolvedPath).Length;
+        }
+        catch { return -1; }
+    }
+
+    /// <summary>Last-write time (UTC ticks) of a resolved path, 0 when unknown. For an in-memory
+    /// asset this is the containing archive's write time, so a replaced BSA still invalidates
+    /// caches keyed on it.</summary>
+    public long GetResolvedLastWriteTicks(string resolvedPath)
+    {
+        if (_memoryAssets.TryGetValue(resolvedPath, out var asset)) return asset.BsaWriteTicks;
+        try { return File.GetLastWriteTimeUtc(resolvedPath).Ticks; }
+        catch { return 0; }
+    }
 
     /// <summary>Returns a stable short directory token for a BSA absolute
     /// path. SHA256-prefix derived so it persists across sessions (extracted
@@ -302,13 +529,16 @@ public class GameAssetResolver
         // Scoped resolve entries point at the extractions we're about to delete; drop
         // them so a later hit doesn't re-validate a dangling path then re-resolve.
         _scopedResolveCache.Clear();
+        // In-memory assets: nothing on disk; forgetting them frees their bytes.
+        _memoryAssets.Clear();
+        _memoryStoreInstance?.Clear();
 
         int deleted = 0;
         foreach (var kv in snapshot)
         {
             try
             {
-                if (File.Exists(kv.Value))
+                if (!IsUnderMemoryRoot(kv.Value) && File.Exists(kv.Value))
                 {
                     File.Delete(kv.Value);
                     deleted++;
@@ -814,7 +1044,7 @@ public class GameAssetResolver
             // it still exists — a loose file may have been removed or a BSA
             // extraction cleared since caching — else fall through to re-resolve.
             if (cachedScoped.Kind == AssetOriginKind.NotFound) return cachedScoped;
-            if (cachedScoped.ResolvedDiskPath != null && File.Exists(cachedScoped.ResolvedDiskPath))
+            if (AssetFileExists(cachedScoped.ResolvedDiskPath))
                 return ReportDataFolderFallback(cachedScoped);
         }
 
@@ -1063,32 +1293,32 @@ public class GameAssetResolver
         // field doc for why mixing BSAs under one key/destination caused
         // mod-scoped renders to render vanilla content.
         string cacheKey = MakeExtractionCacheKey(containingBsaPath, normalized);
-        string destPath = MakeExtractionDestPath(containingBsaPath, normalized);
+        string destPath = MakeBsaAssetPath(containingBsaPath, normalized);
         var lockObj = _extractionLocks.GetOrAdd(cacheKey, _ => new object());
         lock (lockObj)
         {
             if (_extractionCache.TryGetValue(cacheKey, out string? priorExtract) &&
-                File.Exists(priorExtract))
+                AssetFileExists(priorExtract))
             {
                 Trace($"scoped CACHE-HIT file=[{normalized}] bsa=[{containingBsaPath}] dest=[{priorExtract}]");
                 return new AssetSource(AssetOriginKind.Bsa, relativeGamePath,
-                    priorExtract, null, containingBsaPath, bsaSubpath);
+                    priorExtract, null, containingBsaPath, bsaSubpath) { IsInMemory = IsInMemoryPath(priorExtract) };
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-            if (_bsaProvider.TryExtractToDisk(containingBsaPath, bsaSubpath, destPath, out string? scopedExtractError))
+            if (TryMaterializeBsaAsset(containingBsaPath, bsaSubpath, destPath, out string? scopedExtractError))
             {
                 _extractionCache[cacheKey] = destPath;
                 Trace($"scoped EXTRACT file=[{normalized}] bsa=[{containingBsaPath}] dest=[{destPath}]");
                 LogVerbose("SkyRender: Resolved '" + relativeGamePath +
-                    "' -> scoped-BSA extraction at '" + destPath +
-                    "' (from '" + containingBsaPath + "')");
+                    (ServesBsaAssetsFromMemory ? "' -> scoped-BSA in memory as '" : "' -> scoped-BSA extraction at '") +
+                    destPath + "' (from '" + containingBsaPath + "')");
                 return new AssetSource(AssetOriginKind.Bsa, relativeGamePath,
-                    destPath, null, containingBsaPath, bsaSubpath);
+                    destPath, null, containingBsaPath, bsaSubpath) { IsInMemory = ServesBsaAssetsFromMemory };
             }
 
             _logger.LogError("SkyRender: Found '" + relativeGamePath +
-                "' in scoped BSA '" + containingBsaPath + "' but extraction failed: " +
+                "' in scoped BSA '" + containingBsaPath + "' but " +
+                (ServesBsaAssetsFromMemory ? "reading it failed: " : "extraction failed: ") +
                 (scopedExtractError ?? "(no detail)"));
             return AssetSource.NotFound(relativeGamePath);
         }
@@ -1097,7 +1327,7 @@ public class GameAssetResolver
     /// <summary>
     /// Opens a readable stream for a game-relative asset path.
     /// Returns null if the asset cannot be found.
-    /// For BSA assets, this extracts to temp and opens the extracted file.
+    /// For BSA assets, this opens the extracted file or the in-memory bytes.
     /// </summary>
     public Stream? OpenAssetStream(string relativeGamePath)
     {
@@ -1109,7 +1339,7 @@ public class GameAssetResolver
 
         try
         {
-            return File.OpenRead(resolved);
+            return OpenResolvedRead(resolved);
         }
         catch (Exception ex)
         {
@@ -1123,7 +1353,7 @@ public class GameAssetResolver
         // Fast path before locking: if another thread already extracted and
         // cached, return that immediately.
         if (_bsaSourceCache.TryGetValue(normalized, out var cachedSource) &&
-            cachedSource.ResolvedDiskPath != null && File.Exists(cachedSource.ResolvedDiskPath))
+            AssetFileExists(cachedSource.ResolvedDiskPath))
         {
             return cachedSource;
         }
@@ -1142,7 +1372,7 @@ public class GameAssetResolver
         // Per-source-BSA cache + on-disk destination — see _extractionCache
         // field doc for the mod-scoping bug that motivates BSA-aware keying.
         string cacheKey = MakeExtractionCacheKey(containingBsaPath!, normalized);
-        string destPath = MakeExtractionDestPath(containingBsaPath!, normalized);
+        string destPath = MakeBsaAssetPath(containingBsaPath!, normalized);
 
         // Per-(BSA, path) lock so the cache-check + extract sequence is atomic
         // for concurrent callers asking for the same asset from the same BSA.
@@ -1153,33 +1383,33 @@ public class GameAssetResolver
             // the extraction while we were waiting.
             if (_bsaSourceCache.TryGetValue(normalized, out var racedSource) &&
                 racedSource.BsaPath == containingBsaPath &&
-                racedSource.ResolvedDiskPath != null &&
-                File.Exists(racedSource.ResolvedDiskPath))
+                AssetFileExists(racedSource.ResolvedDiskPath))
             {
                 return racedSource;
             }
 
-            // Reuse a prior extraction if still on disk
-            if (_extractionCache.TryGetValue(cacheKey, out string? priorExtract) && File.Exists(priorExtract))
+            // Reuse a prior extraction (or in-memory registration) if still available
+            if (_extractionCache.TryGetValue(cacheKey, out string? priorExtract) && AssetFileExists(priorExtract))
             {
                 var source = new AssetSource(AssetOriginKind.Bsa, relativeGamePath, priorExtract,
-                    null, containingBsaPath, bsaSubpath);
+                    null, containingBsaPath, bsaSubpath) { IsInMemory = IsInMemoryPath(priorExtract) };
                 _bsaSourceCache[normalized] = source;
                 return source;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-            if (_bsaProvider.TryExtractToDisk(containingBsaPath!, bsaSubpath, destPath, out string? extractError))
+            if (TryMaterializeBsaAsset(containingBsaPath!, bsaSubpath, destPath, out string? extractError))
             {
                 _extractionCache[cacheKey] = destPath;
-                LogVerbose("SkyRender: Resolved '" + relativeGamePath + "' -> BSA extraction at '" + destPath + "'");
+                LogVerbose("SkyRender: Resolved '" + relativeGamePath +
+                    (ServesBsaAssetsFromMemory ? "' -> BSA in memory as '" : "' -> BSA extraction at '") + destPath + "'");
                 var source = new AssetSource(AssetOriginKind.Bsa, relativeGamePath, destPath,
-                    null, containingBsaPath, bsaSubpath);
+                    null, containingBsaPath, bsaSubpath) { IsInMemory = ServesBsaAssetsFromMemory };
                 _bsaSourceCache[normalized] = source;
                 return source;
             }
 
-            _logger.LogError("SkyRender: Found '" + relativeGamePath + "' in BSA but extraction failed: " +
+            _logger.LogError("SkyRender: Found '" + relativeGamePath + "' in BSA but " +
+                (ServesBsaAssetsFromMemory ? "reading it failed: " : "extraction failed: ") +
                 (extractError ?? "(no detail)"));
             return AssetSource.NotFound(relativeGamePath);
         }

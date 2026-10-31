@@ -8,7 +8,9 @@ namespace SkyRender;
 /// works in disk paths only — no Mutagen archive types leak into the renderer
 /// — so other host apps can implement it against their own BSA stack.
 ///
-/// A host adapts its own BSA reader behind this interface.
+/// A host adapts its own BSA reader behind this interface. A host that can also supply a file's
+/// bytes implements <see cref="IBsaArchiveByteReader"/> on the same object, and the resolver then
+/// serves archive files from memory instead of calling <see cref="TryExtractToDisk"/>.
 /// </summary>
 public interface IBsaArchiveProvider
 {

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Archive files can be served from memory instead of being extracted to the cache folder. A host
+  opts in by implementing the new `IBsaArchiveByteReader` on its BSA provider; providers that
+  don't keep extracting, so existing hosts compile and behave as before.
+  - `AssetSource.IsInMemory`; `GameAssetResolver.OpenResolvedRead`, `ReadResolvedBytes`,
+    `AssetFileExists`, `GetResolvedLength`, `GetResolvedLastWriteTicks`; `NifFileLoader.TryLoad`
+    loads a NIF from either kind of path.
+  - `GameAssetResolver.ExtractBsaAssetsToDisk` forces extraction even with a reader;
+    `InMemoryAssetBudgetBytes` (default 128 MB) bounds the cache of recently read files.
+  - `GameAssetResolver.GetBsaAssetStats()` counts reads, re-reads, bytes and time in both modes.
+  - `AssetCache.Resolver` exposes the resolver. `DistantLodLoader.Load`, `LodNifReader.Read` and
+    `ReferencePlacement.ReadRootTransform` take an optional resolver for in-memory paths.
+  - The CharacterDemo sample's provider implements the reader.
+  - `NifFileLoader` hands an in-memory NIF to nifly with one copy instead of one interop call per
+    byte (4.9 MB: 28 ms to 0.6 ms), falling back to the per-byte route if niflysharp's vector layout
+    doesn't check out.
+
 ## 3.0.1
 
 Documentation only; the libraries are unchanged.

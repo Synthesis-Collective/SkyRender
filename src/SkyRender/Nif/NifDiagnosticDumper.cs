@@ -80,7 +80,7 @@ internal static partial class NifDiagnosticDumper
             return;
         }
 
-        DumpHeader(sb, nifPath, header);
+        DumpHeader(sb, nifPath, header, assetResolver);
         FlushFlush(logger, sb);
 
         var texturePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -137,12 +137,12 @@ internal static partial class NifDiagnosticDumper
     //  Section 1 — Header
     // ════════════════════════════════════════════════════════════════════
 
-    private static void DumpHeader(StringBuilder sb, string nifPath, NiHeader header)
+    private static void DumpHeader(StringBuilder sb, string nifPath, NiHeader header, GameAssetResolver? assetResolver)
     {
         sb.AppendLine();
         sb.AppendLine("=== Header ===");
-        long fileBytes = -1;
-        try { fileBytes = new FileInfo(nifPath).Length; } catch { }
+        long fileBytes = assetResolver?.GetResolvedLength(nifPath)
+            ?? (File.Exists(nifPath) ? new FileInfo(nifPath).Length : -1);
         sb.AppendLine($"  Path:           {nifPath}");
         sb.AppendLine($"  File size:      {(fileBytes >= 0 ? fileBytes.ToString("N0") + " bytes" : "<unknown>")}");
 

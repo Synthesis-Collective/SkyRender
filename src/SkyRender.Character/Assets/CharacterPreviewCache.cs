@@ -209,11 +209,9 @@ public class CharacterPreviewCache
                 skelDiskPath = _assetResolver.ResolveAssetPath(paths.SkeletonPath);
                 if (skelDiskPath != null)
                 {
-                    skeletonNif = new nifly.NifFile();
-                    if (skeletonNif.Load(skelDiskPath) != 0)
+                    skeletonNif = NifFileLoader.TryLoad(skelDiskPath, _assetResolver);
+                    if (skeletonNif == null)
                     {
-                        skeletonNif.Dispose();
-                        skeletonNif = null;
                         // Keep skelDiskPath as the cache key even on load failure, so
                         // these entries key identically to the render's lazy path
                         // (LoadAllMeshParts keeps the resolved skeleton path as the
@@ -455,7 +453,7 @@ public class CharacterPreviewCache
         if (Assets.DdsMaximumFinalMipDimension is int maximum)
         {
             string? disk = Assets.ResolveAssetPath(path);
-            if (disk != null && CompressedDds.Inspect(disk, maximum, out _) == DdsReadStatus.Eligible) return;
+            if (disk != null && Assets.InspectCompressedDds(disk, maximum, out _) == DdsReadStatus.Eligible) return;
         }
         using (AssetCache.DecodeReason(isDiffuse ? "prewarm-diffuse" : "prewarm"))
             Assets.GetOrLoadDdsPixels(path);

@@ -86,11 +86,10 @@ internal static partial class NifDiagnosticDumper
 
         sb.Append("    disk:   ").AppendLine(src.ResolvedDiskPath);
 
-        long fileBytes = -1;
-        try { fileBytes = new FileInfo(src.ResolvedDiskPath).Length; } catch { }
+        long fileBytes = assetResolver.GetResolvedLength(src.ResolvedDiskPath);
         if (fileBytes >= 0) sb.Append("    bytes:  ").AppendLine(fileBytes.ToString("N0"));
 
-        DdsInfo? info = TryReadDdsHeader(src.ResolvedDiskPath);
+        DdsInfo? info = TryReadDdsHeader(assetResolver, src.ResolvedDiskPath);
         if (info == null)
         {
             sb.AppendLine("    dds:    <not a DDS or read failed>");
@@ -106,18 +105,19 @@ internal static partial class NifDiagnosticDumper
         // Reveals whether (e.g.) a FaceTint texture has an alpha mask we're
         // ignoring, or whether two diffuses we expect to match actually differ
         // significantly in mean tone.
-        TryDumpPixelStats(sb, src.ResolvedDiskPath);
+        TryDumpPixelStats(sb, assetResolver, src.ResolvedDiskPath);
     }
 
     // ════════════════════════════════════════════════════════════════════
     //  Pixel statistics (mean RGB, mean alpha, alpha histogram)
     // ════════════════════════════════════════════════════════════════════
 
-    private static void TryDumpPixelStats(StringBuilder sb, string diskPath)
+    private static void TryDumpPixelStats(StringBuilder sb, GameAssetResolver assetResolver, string diskPath)
     {
         try
         {
-            using var image = Pfimage.FromFile(diskPath);
+            using var stream = assetResolver.OpenResolvedRead(diskPath);
+            using var image = Pfimage.FromStream(stream);
             int w = image.Width, h = image.Height;
             int stride = image.Stride;
             byte[] data = image.Data;
@@ -223,11 +223,11 @@ internal static partial class NifDiagnosticDumper
         public string? Format;
     }
 
-    private static DdsInfo? TryReadDdsHeader(string path)
+    private static DdsInfo? TryReadDdsHeader(GameAssetResolver assetResolver, string path)
     {
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var fs = assetResolver.OpenResolvedRead(path);
             // Buffer enough for DDS_HEADER (124B + 4B magic = 128B) and
             // optional DDS_HEADER_DXT10 (+20B). 148 bytes covers both.
             Span<byte> buf = stackalloc byte[148];

@@ -88,7 +88,7 @@ internal sealed class SceneLoader
                 try
                 {
                     var shapes = _assets.MeshBuilder.BuildFromFile(item.Disk, ct: ct);
-                    parsed[item.Path] = new PreparedModel(shapes, ReferencePlacement.ReadRootTransform(item.Disk));
+                    parsed[item.Path] = new PreparedModel(shapes, ReferencePlacement.ReadRootTransform(item.Disk, _assets.Resolver));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { _log.LogError("Could not read " + item.Path, ex); }
@@ -128,7 +128,7 @@ internal sealed class SceneLoader
                 Eye = eye,
                 LoadedCells = new LoadedCells(data.LoadedCells),
                 MaxDistance = LodReach,
-            }, _assets.ResolveAssetPath);
+            }, _assets.ResolveAssetPath, _assets.Resolver);
             prepared.Mark("LOD");
         }
 

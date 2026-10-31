@@ -49,12 +49,15 @@ public sealed class DistantLodData
 /// (<see cref="LodMeshBuilder"/>). LOD water comes out of the terrain blocks' files. Files are found through the host's resolver, which maps a
 /// game-relative path to a file on disk (loose or extracted from an archive), or null when no
 /// active source has it; <see cref="GameAssetResolver.ResolveAssetPath"/> is one. Upload the result
-/// with <see cref="GlWorldFactory.CreateDistantLod"/>.
+/// with <see cref="GlWorldFactory.CreateDistantLod"/>. Pass that resolver as <paramref name="reader"/>
+/// too when it may serve archive files from memory (<see cref="IBsaArchiveByteReader"/>).
 /// </summary>
 public static class DistantLodLoader
 {
-    public static DistantLodData Load(DistantLodRequest request, Func<string, string?> resolveDiskPath)
+    public static DistantLodData Load(DistantLodRequest request, Func<string, string?> resolveDiskPath,
+        GameAssetResolver? reader = null)
     {
+        byte[] ReadAll(string path) => reader?.ReadResolvedBytesShared(path) ?? File.ReadAllBytes(path);
         var sw = Stopwatch.StartNew();
         string w = request.Worldspace;
         var settings = request.Settings;
@@ -63,7 +66,7 @@ public static class DistantLodLoader
             string? lodPath = resolveDiskPath(LodSettings.PathFor(w));
             if (lodPath is null)
                 return new DistantLodData { Problem = $"no {LodSettings.PathFor(w)} in the active sources", Elapsed = sw.Elapsed };
-            try { settings = LodSettings.Parse(File.ReadAllBytes(lodPath)); }
+            try { settings = LodSettings.Parse(ReadAll(lodPath)); }
             catch (Exception ex) { return new DistantLodData { Problem = $"{LodSettings.PathFor(w)}: {ex.Message}", Elapsed = sw.Elapsed }; }
         }
         var data = new DistantLodData { Settings = settings };
@@ -77,7 +80,7 @@ public static class DistantLodLoader
             if (lst is null) data.Errors.Add($"{LodPaths.TreeList(w)}: not found; tree LOD skipped");
             else
             {
-                try { treeTypes = TreeLodFiles.ParseList(File.ReadAllBytes(lst)); }
+                try { treeTypes = TreeLodFiles.ParseList(ReadAll(lst)); }
                 catch (Exception ex) { data.Errors.Add($"{LodPaths.TreeList(w)}: {ex.Message}"); }
             }
         }
@@ -103,13 +106,13 @@ public static class DistantLodLoader
                 {
                     if (kind == LodKind.Trees)
                     {
-                        var groups = TreeLodFiles.ParseBlock(File.ReadAllBytes(disk));
+                        var groups = TreeLodFiles.ParseBlock(ReadAll(disk));
                         if (LodMeshBuilder.BuildTrees(block, groups, treeTypes!, loaded, LodPaths.TreeAtlas(w)) is { } tp)
                             data.Parts.Add(tp);
                         continue;
                     }
                     bool blockWater = false;
-                    foreach (var shape in LodNifReader.Read(disk, includeWater: kind == LodKind.Terrain && water))
+                    foreach (var shape in LodNifReader.Read(disk, includeWater: kind == LodKind.Terrain && water, reader))
                     {
                         LodMeshPart? part;
                         if (shape.IsWater) { blockWater = true; part = LodMeshBuilder.BuildWater(block, shape, loaded); }

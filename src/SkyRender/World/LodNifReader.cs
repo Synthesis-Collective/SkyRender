@@ -60,11 +60,11 @@ public static class LodNifReader
     /// <summary>The node a terrain LOD block keeps its LOD water quads under.</summary>
     public const string WaterNodeName = "WATER";
 
-    public static List<LodShape> Read(string diskPath, bool includeWater = false)
+    public static List<LodShape> Read(string diskPath, bool includeWater = false, GameAssetResolver? resolver = null)
     {
         var shapesOut = new List<LodShape>();
-        using var nif = new NifFile();
-        if (nif.Load(diskPath) != 0) throw new InvalidOperationException($"nifly could not load '{diskPath}'");
+        using var nif = NifFileLoader.TryLoad(diskPath, resolver)
+            ?? throw new InvalidOperationException($"nifly could not load '{diskPath}'");
         var header = nif.GetHeader();
         using var shapes = nif.GetShapes();
         foreach (var shape in shapes)

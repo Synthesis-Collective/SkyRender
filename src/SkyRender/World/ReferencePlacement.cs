@@ -58,14 +58,15 @@ public static class ReferencePlacement
     /// identity. <see cref="NifMeshBuilder"/> composes every node up to and including the root; a
     /// placed reference does not take the root's transform (a door whose root turns it 90 degrees
     /// stands flush in its frame in game only without it), so pass this to
-    /// <see cref="ModelTransform"/> to undo it.
+    /// <see cref="ModelTransform"/> to undo it. Pass the resolver that produced the path when it
+    /// may be an in-memory archive file.
     /// </summary>
-    public static Matrix4? ReadRootTransform(string nifPath)
+    public static Matrix4? ReadRootTransform(string nifPath, GameAssetResolver? resolver = null)
     {
         try
         {
-            using var nif = new nifly.NifFile();
-            if (nif.Load(nifPath) != 0) return null;
+            using var nif = NifFileLoader.TryLoad(nifPath, resolver);
+            if (nif == null) return null;
             var root = nif.GetRootNode();
             if (root is null) return null;
             var t = root.GetTransformToParent();

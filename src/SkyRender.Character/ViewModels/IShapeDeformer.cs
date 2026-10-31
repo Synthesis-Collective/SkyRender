@@ -26,6 +26,9 @@ public interface IShapeDeformer
     /// passed in). Return false when there is nothing to apply: the primary scene then keeps its
     /// shapes exactly as they are and <see cref="VM_CharacterViewer.ShapesDeformed"/> is not raised.
     /// The guest overlay re-derives its shapes either way.
+    /// <para>When the host's BSA provider implements <see cref="IBsaArchiveByteReader"/>, a body NIF
+    /// that came from an archive has an in-memory path with no file behind it: read it through
+    /// <see cref="GameAssetResolver.OpenResolvedRead"/>, not <c>File</c> APIs.</para>
     /// </summary>
     bool Prepare(string? bodyNifDiskPath, int weight);
 

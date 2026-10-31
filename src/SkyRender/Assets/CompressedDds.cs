@@ -33,12 +33,21 @@ public sealed class CompressedDds
     /// <summary>Reads and validates headers and every declared mip before allocating blocks.
     /// Unsupported layouts/semantics use the decoded route; malformed supported files are errors.</summary>
     public static DdsReadStatus Read(string path, out CompressedDds? texture, out string reason, int maximumFinalMipDimension = 1)
-        => ReadCore(path, true, maximumFinalMipDimension, out texture, out reason);
+        => ReadCore(() => File.OpenRead(path), true, maximumFinalMipDimension, out texture, out reason);
 
     internal static DdsReadStatus Inspect(string path, int maximumFinalMipDimension, out string reason)
-        => ReadCore(path, false, maximumFinalMipDimension, out _, out reason);
+        => ReadCore(() => File.OpenRead(path), false, maximumFinalMipDimension, out _, out reason);
 
-    private static DdsReadStatus ReadCore(string path, bool readBlocks, int maximumFinalMipDimension, out CompressedDds? texture, out string reason)
+    /// <summary><see cref="Read(string, out CompressedDds?, out string, int)"/> for a stream the
+    /// method opens (and disposes) itself, e.g. <see cref="GameAssetResolver.OpenResolvedRead"/>;
+    /// an exception from <paramref name="open"/> is reported like a file-open failure.</summary>
+    internal static DdsReadStatus Read(Func<Stream> open, out CompressedDds? texture, out string reason, int maximumFinalMipDimension = 1)
+        => ReadCore(open, true, maximumFinalMipDimension, out texture, out reason);
+
+    internal static DdsReadStatus Inspect(Func<Stream> open, int maximumFinalMipDimension, out string reason)
+        => ReadCore(open, false, maximumFinalMipDimension, out _, out reason);
+
+    private static DdsReadStatus ReadCore(Func<Stream> open, bool readBlocks, int maximumFinalMipDimension, out CompressedDds? texture, out string reason)
     {
         if (maximumFinalMipDimension <= 0) throw new ArgumentOutOfRangeException(nameof(maximumFinalMipDimension));
         texture = null;
@@ -46,7 +55,7 @@ public sealed class CompressedDds
         double readMs = 0;
         try
         {
-            using var stream = File.OpenRead(path);
+            using var stream = open();
             Span<byte> header = stackalloc byte[148];
             stream.ReadExactly(header[..128]);
             readMs += elapsed.Elapsed.TotalMilliseconds;

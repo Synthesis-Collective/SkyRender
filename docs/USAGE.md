@@ -54,6 +54,26 @@ var assets   = new AssetCache(resolver, logger, logGate);   // decoded textures 
 `GameAssetResolver` answers "where is `textures\foo.dds` really": loose file, archive (extracted
 on demand into a cache folder), or missing. Game-relative paths are used everywhere.
 
+### Archive files from memory
+
+If your BSA provider can hand over a file's bytes, also implement `IBsaArchiveByteReader` on the
+same object. The resolver then reads archive files into memory instead of extracting them, so
+rendering writes nothing to the cache folder (the CharacterDemo sample does this). A provider
+without it keeps extracting, unchanged.
+
+An in-memory asset still has a path-shaped `AssetSource.ResolvedDiskPath` (under
+`<cache>\memory\`), so caches and logs work as before, but no file exists there and
+`AssetSource.IsInMemory` is true. SkyRender's own readers handle it. Your code must too: wherever
+it reads a resolved path itself (for example in an `IShapeDeformer`, or by passing
+`ResolvedDiskPath` to your own NIF reader), use `resolver.OpenResolvedRead(path)`,
+`ReadResolvedBytes`, `AssetFileExists` or `NifFileLoader.TryLoad(path, resolver)` rather than
+`File` APIs. Files *next to* a resolved archive file (a sibling `.tri`, say) are not there in
+either mode; resolve them by their own game path.
+
+Recently read files are kept up to `InMemoryAssetBudgetBytes` (default 128 MB) and read from the
+archive again after eviction. `GetBsaAssetStats()` reports reads, re-reads, bytes and time in
+either mode, for comparing it with extraction (`ExtractBsaAssetsToDisk = true`).
+
 ## 3. Show a NIF in a WPF window
 
 The core building blocks, in the order a scene is built:
@@ -423,6 +443,7 @@ the GL thread. See [RENDERING_PIPELINE.md, Distant LOD](RENDERING_PIPELINE.md#di
 | Verbose logging | `RenderLogGate.Verbose` |
 | RAM budget for decoded textures and parsed NIFs | `IRenderSettings.CacheMode` / `FixedCacheBudgetBytes` / `FreeRamCachePercent` |
 | Archive extraction folder | `new GameAssetResolver(..., extractionDirectory: path)` (default: `SkyRenderCache` beside the application) |
+| Archive files from memory | implement `IBsaArchiveByteReader` on the BSA provider; `GameAssetResolver.ExtractBsaAssetsToDisk` forces extraction, `InMemoryAssetBudgetBytes` sizes the byte cache |
 | Compressed texture uploads | environment variable `SKYRENDER_DDS_MAX_FINAL_MIP_DIMENSION` (`decoded` disables them; see `DdsMipPolicy`) |
 | Texture upload diagnostics | environment variable `SKYRENDER_DDS_DIAGNOSTICS=1` |
 | Shader hot-editing | edit the `Shaders\*.vert/.frag` copied beside the assembly; they take precedence over the embedded copies |

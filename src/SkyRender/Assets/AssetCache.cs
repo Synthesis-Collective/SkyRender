@@ -231,6 +231,19 @@ public class AssetCache
     public string? ResolveAssetPath(string relativeGamePath) =>
         _assetResolver.ResolveAssetPath(relativeGamePath);
 
+    /// <summary>The resolver this cache resolves through; read resolved paths with its
+    /// <see cref="GameAssetResolver.OpenResolvedRead"/> (they may be in-memory archive files).</summary>
+    public GameAssetResolver Resolver => _assetResolver;
+
+    /// <summary><see cref="CompressedDds.Read(string, out CompressedDds?, out string, int)"/> for a
+    /// path from <see cref="ResolveAssetPath"/>, which may be an in-memory BSA asset.</summary>
+    internal DdsReadStatus ReadCompressedDds(string resolvedPath, out CompressedDds? texture, out string reason, int maximumFinalMipDimension) =>
+        CompressedDds.Read(() => _assetResolver.OpenResolvedRead(resolvedPath), out texture, out reason, maximumFinalMipDimension);
+
+    /// <summary><see cref="CompressedDds.Inspect(string, int, out string)"/> for a resolved path.</summary>
+    internal DdsReadStatus InspectCompressedDds(string resolvedPath, int maximumFinalMipDimension, out string reason) =>
+        CompressedDds.Inspect(() => _assetResolver.OpenResolvedRead(resolvedPath), maximumFinalMipDimension, out reason);
+
     /// <summary>
     /// Returns BGRA32 pixel data for the given game-relative DDS path, decoding
     /// through Pfim on cache miss and caching successful results for subsequent
@@ -374,7 +387,7 @@ public class AssetCache
         // transparent" exactly, without decoding (an ordinary opaque diffuse is
         // proven by its first block). Anything unproven takes the full decode.
         bool verdict;
-        if (DdsAlphaProbe.ProvesNonZeroAlpha(diskPath))
+        if (ProvesNonZeroAlpha(diskPath))
         {
             verdict = false;
         }
@@ -389,6 +402,19 @@ public class AssetCache
         lock (_transparencyLock)
             _fullyTransparentCache[diskPath] = verdict;
         return verdict;
+    }
+
+    private bool ProvesNonZeroAlpha(string resolvedPath)
+    {
+        try
+        {
+            using var stream = _assetResolver.OpenResolvedRead(resolvedPath);
+            return DdsAlphaProbe.ProvesNonZeroAlpha(stream);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return false;
+        }
     }
 
     // BGRA32: alpha is every 4th byte (offset +3). The early-out on the first
@@ -418,12 +444,13 @@ public class AssetCache
     /// </summary>
     private DdsPixels? DecodeDds(string resolved, string relativeGamePath)
     {
-        if (!File.Exists(resolved)) return null;
+        if (!_assetResolver.AssetFileExists(resolved)) return null;
 
         try
         {
             System.Threading.Interlocked.Increment(ref _decodeCalls);
-            using var image = Pfimage.FromFile(resolved);
+            using var stream = _assetResolver.OpenResolvedRead(resolved);
+            using var image = Pfimage.FromStream(stream);
             byte[]? bgra = PfimageToBgra32(image, relativeGamePath);
             if (bgra == null) return null;
             System.Threading.Interlocked.Add(ref _decodedBytes, bgra.LongLength);
@@ -543,11 +570,12 @@ public class AssetCache
     /// </summary>
     private DdsCubemapPixels? DecodeDdsCubemap(string resolved, string relativeGamePath)
     {
-        if (!File.Exists(resolved)) return null;
+        if (!_assetResolver.AssetFileExists(resolved)) return null;
 
         try
         {
-            byte[] fileBytes = File.ReadAllBytes(resolved);
+            // Shared array for in-memory assets: only read from below, never written.
+            byte[] fileBytes = _assetResolver.ReadResolvedBytesShared(resolved);
             if (fileBytes.Length < 128) return null;
 
             uint magic = BitConverter.ToUInt32(fileBytes, 0);

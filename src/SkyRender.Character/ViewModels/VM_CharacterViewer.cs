@@ -3896,13 +3896,8 @@ public partial class VM_CharacterViewer : ViewerVm
                 skelDiskPath = _assetResolver.ResolveAssetPath(_cachedMeshPaths.SkeletonPath);
                 if (skelDiskPath != null)
                 {
-                    skeletonNif = new nifly.NifFile();
-                    if (skeletonNif.Load(skelDiskPath) != 0)
-                    {
-                        skeletonNif.Dispose();
-                        skeletonNif = null;
-                        skelDiskPath = null;
-                    }
+                    skeletonNif = NifFileLoader.TryLoad(skelDiskPath, _assetResolver);
+                    if (skeletonNif == null) skelDiskPath = null;
                 }
             }
 
@@ -4471,6 +4466,15 @@ public partial class VM_CharacterViewer : ViewerVm
         return remaining;
     }
 
+    /// <summary><see cref="File.ReadAllText(string)"/> for a resolved path that may be an
+    /// in-memory BSA asset: same BOM detection, UTF-8 otherwise.</summary>
+    private string ReadResolvedText(string resolvedPath)
+    {
+        using var reader = new StreamReader(_assetResolver.OpenResolvedRead(resolvedPath),
+            System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
     /// <summary>Reads one physics XML and pours its bone-name evidence into
     /// <paramref name="attributeValues"/> (parseable XML: every attribute value)
     /// or <paramref name="unparsedTexts"/> (hand-authored XML that fails to
@@ -4480,7 +4484,7 @@ public partial class VM_CharacterViewer : ViewerVm
         HashSet<string> attributeValues, List<string> unparsedTexts)
     {
         string text;
-        try { text = File.ReadAllText(diskPath); }
+        try { text = ReadResolvedText(diskPath); }
         catch (Exception ex)
         {
             LogVerbose("CharacterViewer: ApplyMeshOverrides '" + ovKey + "' physics XML '" +
@@ -5118,9 +5122,8 @@ public partial class VM_CharacterViewer : ViewerVm
             skeletonLoadAttempted = true;
             if (skelDiskPath != null)
             {
-                var sk = new nifly.NifFile();
-                if (sk.Load(skelDiskPath) == 0) skeletonNif = sk;
-                else { sk.Dispose(); _missingMeshPaths.Add(meshPaths.SkeletonPath); }
+                skeletonNif = NifFileLoader.TryLoad(skelDiskPath, _assetResolver);
+                if (skeletonNif == null) _missingMeshPaths.Add(meshPaths.SkeletonPath);
             }
             return skeletonNif;
         }

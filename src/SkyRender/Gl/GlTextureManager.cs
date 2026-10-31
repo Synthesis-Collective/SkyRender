@@ -183,7 +183,7 @@ public class GlTextureManager : IDisposable
         if (compressedMode && diskPath != null)
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();
-            var status = CompressedDds.Read(diskPath, out var dds, out fallbackReason, maximumFinalMipDimension!.Value);
+            var status = _previewCache.ReadCompressedDds(diskPath, out var dds, out fallbackReason, maximumFinalMipDimension!.Value);
             readMs = timer.Elapsed.TotalMilliseconds;
             if (status == DdsReadStatus.Invalid)
             {

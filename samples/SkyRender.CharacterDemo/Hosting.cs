@@ -26,9 +26,11 @@ internal sealed class FixedDataFolder(string path) : IDataFolderProvider
 /// The BSA archives of the plugins in the load order, in load order: a plugin's archives are the
 /// ones named after it (Mutagen's <c>Archive.GetApplicableArchivePaths</c>, the game's rule), and a
 /// later plugin's archive wins a path an earlier one also holds. Loose files still win over every
-/// archive (GameAssetResolver checks the Data folder first).
+/// archive (GameAssetResolver checks the Data folder first). Also an
+/// <see cref="IBsaArchiveByteReader"/>, so the resolver serves archive files from memory and
+/// nothing is extracted to disk.
 /// </summary>
-internal sealed class LoadOrderBsaProvider : IBsaArchiveProvider
+internal sealed class LoadOrderBsaProvider : IBsaArchiveProvider, IBsaArchiveByteReader
 {
     private readonly List<(string Path, Dictionary<string, IArchiveFile> Files)> _archives = new();
 
@@ -100,6 +102,31 @@ internal sealed class LoadOrderBsaProvider : IBsaArchiveProvider
                 source.CopyTo(dest);
             try { File.Move(temp, destPath, overwrite: true); }
             catch (IOException) when (File.Exists(destPath)) { File.Delete(temp); }
+            error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    public bool TryReadBytes(string containingBsaPath, string subpath, out byte[]? bytes, out string? error)
+    {
+        bytes = null;
+        var archive = _archives.FirstOrDefault(a => string.Equals(a.Path, containingBsaPath, StringComparison.OrdinalIgnoreCase));
+        if (archive.Files == null || !archive.Files.TryGetValue(subpath.Replace('/', '\\'), out var file))
+        {
+            error = "not found: " + subpath;
+            return false;
+        }
+        try
+        {
+            using var source = file.AsStream();
+            using var buffer = new MemoryStream();
+            source.CopyTo(buffer);
+            bytes = buffer.ToArray();
             error = null;
             return true;
         }

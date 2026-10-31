@@ -795,10 +795,9 @@ public class NifMeshBuilder
         // how much of `build` is parse vs the per-render resolve/clone/morph floor.
         long parseStart = System.Diagnostics.Stopwatch.GetTimestamp();
         var results = new List<BuiltMesh>();
-        using var nif = new NifFile();
-        int loadResult = nif.Load(nifPath);
+        using NifFile? nif = NifFileLoader.TryLoad(nifPath, _assetResolver);
         long loadTicks = System.Diagnostics.Stopwatch.GetTimestamp() - parseStart;
-        if (loadResult != 0)
+        if (nif == null)
         {
             _threadParseTicks += loadTicks;
             _threadLoadTicks += loadTicks;
@@ -957,8 +956,10 @@ public class NifMeshBuilder
         return null;
     }
 
-    private static long TryGetMTime(string path)
+    // An in-memory BSA asset reports its archive's write time (see GameAssetResolver).
+    private long TryGetMTime(string path)
     {
+        if (_assetResolver != null) return _assetResolver.GetResolvedLastWriteTicks(path);
         try { return System.IO.File.GetLastWriteTimeUtc(path).Ticks; }
         catch { return 0; }
     }
@@ -1030,8 +1031,13 @@ public class NifMeshBuilder
         long size = 0;
         try
         {
-            if (!string.IsNullOrWhiteSpace(nifPath) && System.IO.File.Exists(nifPath))
-                size = new System.IO.FileInfo(nifPath).Length;
+            if (!string.IsNullOrWhiteSpace(nifPath))
+            {
+                if (_assetResolver != null && _assetResolver.IsInMemoryPath(nifPath))
+                    size = Math.Max(0, _assetResolver.GetResolvedLength(nifPath));
+                else if (System.IO.File.Exists(nifPath))
+                    size = new System.IO.FileInfo(nifPath).Length;
+            }
         }
         catch { /* best-effort */ }
 
@@ -1059,14 +1065,17 @@ public class NifMeshBuilder
     /// will be without having to render the result.</summary>
     public NifSurveyResult SurveyNif(string nifPath)
     {
-        if (string.IsNullOrWhiteSpace(nifPath) || !System.IO.File.Exists(nifPath))
+        bool exists = !string.IsNullOrWhiteSpace(nifPath) &&
+            (_assetResolver?.AssetFileExists(nifPath) ?? System.IO.File.Exists(nifPath));
+        if (!exists)
             return new NifSurveyResult(false, false, null,
                 Array.Empty<NifSurveyShape>(), "file not found: " + (nifPath ?? "(null)"));
 
-        using var nif = new NifFile();
+        NifFile? loaded;
         try
         {
-            if (nif.Load(nifPath) != 0)
+            loaded = NifFileLoader.TryLoad(nifPath, _assetResolver);
+            if (loaded == null)
                 return new NifSurveyResult(false, false, null,
                     Array.Empty<NifSurveyShape>(), "NifFile.Load returned non-zero");
         }
@@ -1076,6 +1085,7 @@ public class NifMeshBuilder
                 Array.Empty<NifSurveyShape>(), "load threw: " + ex.Message);
         }
 
+        using var nif = loaded;
         bool hasFaceGen = DetectFaceGenNif(nif);
 
         using var shapes = nif.GetShapes();
