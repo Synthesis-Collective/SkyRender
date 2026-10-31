@@ -17,6 +17,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="SkyRender.Character" />
     <InternalsVisibleTo Include="SkyRender.Tests" />
+    <!-- Port to Nifly (docs/NIFLY_PORT_PLAN.md): the snapshot harness diffs NifAccess against the
+         old niflysharp helpers. Remove with niflysharp at the end of the port. -->
+    <InternalsVisibleTo Include="NifSnapshot" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +27,13 @@
          version OpenTK.GLWpfControl 4.3.3 resolves, so the character tier sees one OpenTK. -->
     <PackageReference Include="OpenTK" Version="4.8.2" />
     <PackageReference Include="niflysharp" Version="1.3.0" />
+    <!-- Nifly (ousnius's managed rewrite) replaces niflysharp; both are referenced while the port
+         is in progress. The minimum is 1.1.0-0, not 1.1.0, so a host that builds its own 1.1.0
+         prerelease (houseCARL's 1.1.0-housecarl.N fork) keeps it: with ">= 1.1.0" NuGet silently
+         swapped in upstream 1.1.0 from the package cache (plan, Phase 0 results). That range is
+         what NU1603 (1.1.0-0 itself does not exist) and NU5104 (a prerelease lower bound on a
+         stable package) warn about. -->
+    <PackageReference Include="Nifly" Version="1.1.0-0" NoWarn="NU1603;NU5104" />
     <PackageReference Include="Pfim" Version="0.11.4" />
   </ItemGroup>
 
