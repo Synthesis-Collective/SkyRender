@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.1.1
+
+- `OrbitCamera` panning tracks the cursor. The new `OnMouseMove(x, y, viewportHeight)` overload
+  scales a pan so the point at the target's depth moves exactly as far as the cursor did;
+  `OnMouseMove(x, y)` keeps the old fixed `Distance * 0.002` per pixel.
+- Pans now move along the camera's own right and up axes instead of world up, so a vertical drag
+  with a pitched camera no longer drifts toward or away from the target. This applies to both
+  overloads.
+- The samples pass `GlControl.ActualHeight`.
+
 ## 3.1.0
 
 - Archive files can be served from memory instead of being extracted to the cache folder. A host
