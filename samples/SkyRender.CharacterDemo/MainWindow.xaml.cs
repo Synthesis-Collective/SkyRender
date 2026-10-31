@@ -443,7 +443,7 @@ public partial class MainWindow : Window
     {
         if (_viewer is null) return;
         var p = e.GetPosition(GlControl);
-        _viewer.Camera.OnMouseMove((float)p.X, (float)p.Y);
+        _viewer.Camera.OnMouseMove((float)p.X, (float)p.Y, (float)GlControl.ActualHeight);
     }
 
     private void GlControl_MouseUp(object sender, MouseButtonEventArgs e)

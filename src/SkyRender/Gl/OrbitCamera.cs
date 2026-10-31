@@ -181,7 +181,21 @@ public class OrbitCamera
         _isPanning = false;
     }
 
-    public void OnMouseMove(float x, float y)
+    /// <summary>
+    /// Orbit or pan by the cursor movement since the last call. Without a viewport height
+    /// the pan falls back to a fixed <c>Distance * 0.002</c> world units per pixel, which
+    /// only tracks the cursor at one particular viewport size; pass the height to the
+    /// overload below to keep the model under the cursor.
+    /// </summary>
+    public void OnMouseMove(float x, float y) => OnMouseMove(x, y, 0f);
+
+    /// <summary>
+    /// Orbit or pan by the cursor movement since the last call. <paramref name="viewportHeight"/>
+    /// must be in the same units as <paramref name="x"/>/<paramref name="y"/> (WPF DIPs from
+    /// <c>GetPosition</c> pair with <c>ActualHeight</c>). With a positive height, a pan moves
+    /// the point at the target's depth exactly as far as the cursor moved.
+    /// </summary>
+    public void OnMouseMove(float x, float y, float viewportHeight)
     {
         float dx = x - _lastMouseX;
         float dy = y - _lastMouseY;
@@ -196,12 +210,17 @@ public class OrbitCamera
         }
         else if (_isPanning)
         {
-            // Pan perpendicular to the view direction
-            float azRad = MathHelper.DegreesToRadians(Azimuth);
-            var right = new Vector3(MathF.Cos(azRad), 0, -MathF.Sin(azRad));
-            var up = Vector3.UnitY;
+            // Pan in the image plane: camera right/up, not world up, so a pitched
+            // camera doesn't drift toward or away from the target on vertical drags.
+            var forward = Vector3.Normalize(Target - GetEyePosition());
+            var right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
+            var up = Vector3.Cross(right, forward);
 
-            float panScale = Distance * 0.002f;
+            // At the target's depth the view spans 2 * Distance * tan(fov / 2) vertically,
+            // spread over the viewport's height.
+            float panScale = viewportHeight > 0f
+                ? 2f * Distance * MathF.Tan(MathHelper.DegreesToRadians(FieldOfView) / 2f) / viewportHeight
+                : Distance * 0.002f;
             Target -= right * dx * panScale;
             Target += up * dy * panScale;
         }

@@ -459,7 +459,7 @@ public partial class MainWindow : Window
             _lookFrom = p;
             return;
         }
-        _camera.OnMouseMove((float)p.X, (float)p.Y);
+        _camera.OnMouseMove((float)p.X, (float)p.Y, (float)GlControl.ActualHeight);
     }
 
     private void GlControl_MouseUp(object sender, MouseButtonEventArgs e)

@@ -305,7 +305,7 @@ public partial class MainWindow : Window
     private void GlControl_MouseMove(object sender, MouseEventArgs e)
     {
         var p = e.GetPosition(GlControl);
-        _camera.OnMouseMove((float)p.X, (float)p.Y);
+        _camera.OnMouseMove((float)p.X, (float)p.Y, (float)GlControl.ActualHeight);
     }
 
     private void GlControl_MouseUp(object sender, MouseButtonEventArgs e)

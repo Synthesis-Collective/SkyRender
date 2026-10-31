@@ -123,7 +123,9 @@ GlControl.Visibility = Visibility.Visible;
 ```
 
 Forward mouse input to the camera with `camera.OnMouseDown(x, y, leftButton, middleButton)`,
-`OnMouseMove`, `OnMouseUp` and `OnMouseWheel(delta)` (left drag orbits, middle drag pans).
+`OnMouseMove`, `OnMouseUp` and `OnMouseWheel(delta)` (left drag orbits, middle drag pans). Pass
+the viewport height as `OnMouseMove(x, y, GlControl.ActualHeight)`, in the same units as `x`/`y`,
+so a pan keeps the model under the cursor at any window size.
 
 **Framing.** Point `camera.Target` at the scene's centre and set `camera.Distance` so the
 bounding sphere fits the field of view: `radius / sin(FieldOfView / 2)` plus a margin. NIF models
