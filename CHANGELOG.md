@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.0
 
 - Archive files can be served from memory instead of being extracted to the cache folder. A host
   opts in by implementing the new `IBsaArchiveByteReader` on its BSA provider; providers that
