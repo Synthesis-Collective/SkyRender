@@ -1,5 +1,52 @@
 # Changelog
 
+## 4.0.0
+
+NIFs are now read with ousnius's managed **Nifly** package instead of niflysharp (SWIG bindings
+over the C++ nifly). The core package has no native dependency left, so NIF parsing and mesh
+building run on any platform .NET runs on.
+
+Rendering output is unchanged. Every mesh in a 41,740-file corpus (the Skyrim SE archives plus
+201 mod folders) builds the same as on 3.1.1, value for value, with these exceptions:
+- one vanilla hair NIF with no vertex data is now skipped instead of built as an invisible mesh
+  at the origin;
+- nine meshes with NaN UVs carry a different NaN bit pattern.
+
+Screenshots of the sample scenes and NPCs match 3.1.1 pixel for pixel.
+
+### Breaking changes
+
+- `NifFileLoader.TryLoad` returns a SkyRender-owned `LoadedNif` instead of `nifly.NifFile`.
+  `LoadedNif` is opaque; pass it back to SkyRender. It is still `IDisposable`, so `using` lines
+  keep compiling.
+- `NifMeshBuilder.BuildFromFile` takes `LoadedNif? skeletonNif` and
+  `Func<LoadedNif?>? skeletonProvider`; `BuildFromNif` and `NifDumpApi.DumpToString` take
+  `LoadedNif`.
+- SkyRender no longer brings `niflysharp` in. A host that used `nifly` types directly, relying on
+  SkyRender's dependency, must reference `niflysharp` itself or move to `Nifly`.
+- The NIF dump (`NifDumpApi`, verbose logging) lists each block's fields as Nifly names them
+  rather than in a hand-written layout.
+
+### Added
+
+- `NifFileLoader.TryReadBytes(path, resolver)`: the bytes behind a resolved path, including an
+  archive file served from memory, as the caller's own array. For hosts that parse NIFs with
+  their own library.
+
+### Removed
+
+- The native-vector fast path for in-memory NIFs (`NifFileLoader`'s one-copy fill of
+  niflysharp's byte vector). Nifly reads a `MemoryStream` directly.
+- Warning MSB3246 in referencing projects: it came from niflysharp's native `niflycpp.dll`.
+
+### Packaging
+
+- `SkyRender` depends on `Nifly` with a minimum version of `1.1.0-0`, not `1.1.0`. A host that
+  builds its own 1.1.0 prerelease of Nifly (such as houseCARL's `1.1.0-housecarl.N`) keeps it.
+  With `>= 1.1.0`, NuGet silently replaced such a build with upstream 1.1.0 from its package
+  cache. The range raises NU5104 and NU1603 when packing and restoring, both suppressed in the
+  project file.
+
 ## 3.1.1
 
 - `OrbitCamera` panning tracks the cursor. The new `OnMouseMove(x, y, viewportHeight)` overload

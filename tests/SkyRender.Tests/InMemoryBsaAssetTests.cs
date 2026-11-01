@@ -215,19 +215,18 @@ public sealed class InMemoryBsaAssetTests : IDisposable
     }
 
     [Fact]
-    public void NativeVectorHoldsExactlyTheBytes()
+    public void TryReadBytesHandsBackTheCallersOwnCopy()
     {
-        var random = new System.Random(1234);
-        foreach (int size in new[] { 1, 2, 3, 1000, 5 * 1024 * 1024 + 7 })
-        {
-            var bytes = new byte[size];
-            random.NextBytes(bytes);
-            using var vector = NifFileLoader.ToNativeVector(bytes);
-            Assert.Equal(bytes, vector.ToArray());
-        }
-        // The fast fill must still be in use: a niflysharp update that changes the vector layout
-        // would silently fall back to one interop call per byte.
-        Assert.True(NifFileLoader.BulkFillUsable);
+        var bytes = new byte[] { 10, 20, 30, 40 };
+        var bsa = Archives(true).With(@"meshes\copy.nif", bytes);
+        var resolver = Resolver(bsa);
+        string path = resolver.ResolveAssetPath(@"meshes\copy.nif")!;
+
+        var first = NifFileLoader.TryReadBytes(path, resolver)!;
+        Assert.Equal(bytes, first);
+        first[0] = 99;   // a host scribbling on its copy must not reach the resolver's cache
+        Assert.Equal(bytes, NifFileLoader.TryReadBytes(path, resolver));
+        Assert.Null(NifFileLoader.TryReadBytes(Path.Combine(_data, "missing.nif"), resolver));
     }
 
     [Fact]
@@ -250,7 +249,7 @@ public sealed class InMemoryBsaAssetTests : IDisposable
         {
             Assert.NotNull(rawFile);
             Assert.NotNull(rawMemory);
-            Assert.Equal(rawFile!.GetHeader().GetNumBlocks(), rawMemory!.GetHeader().GetNumBlocks());
+            Assert.Equal(rawFile!.File.Header.BlockCount, rawMemory!.File.Header.BlockCount);
         }
         Assert.Equal(fromFile.Count, fromMemory.Count);
         for (int i = 0; i < fromFile.Count; i++)

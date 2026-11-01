@@ -65,20 +65,16 @@ public static class ReferencePlacement
     {
         try
         {
-            using var nif = NifFileLoader.TryLoad(nifPath, resolver);
+            var nif = NifFileLoader.TryLoad(nifPath, resolver)?.File;
             if (nif == null) return null;
             var root = nif.GetRootNode();
             if (root is null) return null;
-            var t = root.GetTransformToParent();
-            using var ex = new nifly.Vector3 { x = 1f };
-            using var ey = new nifly.Vector3 { y = 1f };
-            using var ez = new nifly.Vector3 { z = 1f };
-            using var c0 = t.rotation.opMult(ex);
-            using var c1 = t.rotation.opMult(ey);
-            using var c2 = t.rotation.opMult(ez);
-            float s = t.scale;
-            return FromNifTransform(new NVec3(c0.x, c0.y, c0.z), new NVec3(c1.x, c1.y, c1.z), new NVec3(c2.x, c2.y, c2.z),
-                new NVec3(t.translation.x, t.translation.y, t.translation.z), s);
+            var t = NifAccess.TransformToParent(root);
+            // The rotation's columns, as rotation * basis vector.
+            var c0 = t.Rotate(NVec3.UnitX);
+            var c1 = t.Rotate(NVec3.UnitY);
+            var c2 = t.Rotate(NVec3.UnitZ);
+            return FromNifTransform(c0, c1, c2, t.T, t.S);
         }
         catch (Exception)
         {

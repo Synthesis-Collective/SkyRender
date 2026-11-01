@@ -1,13 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
-using nifly;
+using NiflySharp;
+using NiflySharp.Blocks;
 
 namespace SkyRender;
 
 /// <summary>
-/// NifSkope-style diagnostic text dump of a loaded <see cref="NifFile"/>.
+/// NifSkope-style diagnostic text dump of a loaded NIF.
 ///
 /// Emits the file header, every block in the file, the scene-graph hierarchy,
 /// and DDS metadata (size, format, mip count) for every referenced texture —
@@ -71,27 +73,18 @@ internal static partial class NifDiagnosticDumper
         sb.AppendLine($" NIF DUMP: {nifPath}");
         sb.AppendLine("════════════════════════════════════════════════════════════════════════");
 
-        NiHeader header;
-        try { header = nif.GetHeader(); }
-        catch (Exception ex)
-        {
-            sb.AppendLine($"  <failed to obtain NiHeader: {ex.Message}>");
-            FlushFlush(logger, sb);
-            return;
-        }
-
-        DumpHeader(sb, nifPath, header, assetResolver);
+        DumpHeader(sb, nifPath, nif, assetResolver);
         FlushFlush(logger, sb);
 
         var texturePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        DumpBlockIndex(sb, header, logger);
+        DumpBlockIndex(sb, nif, logger);
         FlushFlush(logger, sb);
 
-        DumpSceneGraph(sb, nif, header, logger);
+        DumpSceneGraph(sb, nif);
         FlushFlush(logger, sb);
 
-        DumpAllBlockDetails(sb, header, texturePaths, logger);
+        DumpAllBlockDetails(sb, nif, texturePaths, logger);
         FlushFlush(logger, sb);
 
         if (assetResolver != null)
@@ -137,7 +130,7 @@ internal static partial class NifDiagnosticDumper
     //  Section 1 — Header
     // ════════════════════════════════════════════════════════════════════
 
-    private static void DumpHeader(StringBuilder sb, string nifPath, NiHeader header, GameAssetResolver? assetResolver)
+    private static void DumpHeader(StringBuilder sb, string nifPath, NifFile nif, GameAssetResolver? assetResolver)
     {
         sb.AppendLine();
         sb.AppendLine("=== Header ===");
@@ -146,13 +139,14 @@ internal static partial class NifDiagnosticDumper
         sb.AppendLine($"  Path:           {nifPath}");
         sb.AppendLine($"  File size:      {(fileBytes >= 0 ? fileBytes.ToString("N0") + " bytes" : "<unknown>")}");
 
+        var header = nif.Header;
         try
         {
-            using var version = header.GetVersion();
-            sb.AppendLine($"  Version string: {SafeStr(() => version.String())}");
-            sb.AppendLine($"  File version:   {SafeStr(() => version.File().ToString())}");
-            sb.AppendLine($"  User version:   {SafeStr(() => version.User().ToString())}");
-            sb.AppendLine($"  Stream version: {SafeStr(() => version.Stream().ToString())}");
+            var version = header.Version;
+            sb.AppendLine($"  Version string: {SafeStr(version.GetVersionInfo)}");
+            sb.AppendLine($"  File version:   {SafeStr(() => version.FileVersion.ToString())}");
+            sb.AppendLine($"  User version:   {SafeStr(() => version.UserVersion.ToString())}");
+            sb.AppendLine($"  Stream version: {SafeStr(() => version.StreamVersion.ToString())}");
             string game = "?";
             try
             {
@@ -169,38 +163,25 @@ internal static partial class NifDiagnosticDumper
         }
         catch (Exception ex) { sb.AppendLine($"  <version read failed: {ex.Message}>"); }
 
-        sb.AppendLine($"  Creator:        {SafeStr(header.GetCreatorInfo)}");
-        sb.AppendLine($"  Export info:    {SafeStr(header.GetExportInfo)}");
-        sb.AppendLine($"  Block count:    {SafeStr(() => header.GetNumBlocks().ToString())}");
-        sb.AppendLine($"  String count:   {SafeStr(() => header.GetStringCount().ToString())}");
+        sb.AppendLine($"  Creator:        {SafeStr(() => header.Creator?.Content)}");
+        sb.AppendLine($"  Export info:    {SafeStr(() => string.Join(" | ", new[] { header.ExportInfo1?.Content, header.ExportInfo2?.Content, header.ExportInfo3?.Content }.Where(s => !string.IsNullOrEmpty(s))))}");
+        sb.AppendLine($"  Block count:    {SafeStr(() => header.BlockCount.ToString())}");
+        sb.AppendLine($"  Unknown blocks: {SafeStr(() => nif.HasUnknownBlocks ? "yes (kept as written, shown by their real type)" : "none")}");
     }
 
     // ════════════════════════════════════════════════════════════════════
     //  Section 2 — Flat block index
     // ════════════════════════════════════════════════════════════════════
 
-    private static void DumpBlockIndex(StringBuilder sb, NiHeader header, IRenderLogger logger)
+    private static void DumpBlockIndex(StringBuilder sb, NifFile nif, IRenderLogger logger)
     {
         sb.AppendLine();
         sb.AppendLine("=== Block Index ===");
-        uint n;
-        try { n = header.GetNumBlocks(); }
-        catch (Exception ex) { sb.AppendLine($"  <num blocks read failed: {ex.Message}>"); return; }
-
-        for (uint i = 0; i < n; i++)
+        for (int i = 0; i < nif.Blocks.Count; i++)
         {
-            string typeName = SafeStr(() => header.GetBlockTypeStringById(i));
-            string name = "";
-            try
-            {
-                NiObject blk = header.GetBlockById(i);
-                if (blk is NiObjectNET named && named.name != null)
-                {
-                    string raw = SafeStr(() => named.name.get());
-                    if (!string.IsNullOrEmpty(raw)) name = $"  \"{raw}\"";
-                }
-            }
-            catch { }
+            string typeName = BlockTypeName(nif, i);
+            string raw = SafeStr(() => NifAccess.Name(nif.Blocks[i]));
+            string name = !string.IsNullOrEmpty(raw) ? $"  \"{raw}\"" : "";
             sb.Append("  [").Append(i.ToString().PadLeft(4)).Append("] ").Append(typeName).AppendLine(name);
 
             // Flush every 256 lines so very large NIFs don't build a 200KB string
@@ -208,11 +189,15 @@ internal static partial class NifDiagnosticDumper
         }
     }
 
+    /// <summary>The block's on-disk type from the header's table: an unknown block's C# type is
+    /// NiUnknown whatever the file says it is.</summary>
+    private static string BlockTypeName(NifFile nif, int id) => SafeStr(() => NifAccess.BlockTypeName(nif, id));
+
     // ════════════════════════════════════════════════════════════════════
     //  Section 3 — Scene graph
     // ════════════════════════════════════════════════════════════════════
 
-    private static void DumpSceneGraph(StringBuilder sb, NifFile nif, NiHeader header, IRenderLogger logger)
+    private static void DumpSceneGraph(StringBuilder sb, NifFile nif)
     {
         sb.AppendLine();
         sb.AppendLine("=== Scene Graph ===");
@@ -225,13 +210,13 @@ internal static partial class NifDiagnosticDumper
             return;
         }
 
-        var visited = new HashSet<uint>();
-        DumpNodeRecursive(sb, header, root, indent: 0, visited);
+        var visited = new HashSet<int>();
+        DumpNodeRecursive(sb, nif, root, indent: 0, visited);
     }
 
     private const int MaxSceneDepth = 16;
 
-    private static void DumpNodeRecursive(StringBuilder sb, NiHeader header, NiAVObject obj, int indent, HashSet<uint> visited)
+    private static void DumpNodeRecursive(StringBuilder sb, NifFile nif, INiObject obj, int indent, HashSet<int> visited)
     {
         if (obj == null) return;
         if (indent > MaxSceneDepth)
@@ -240,83 +225,59 @@ internal static partial class NifDiagnosticDumper
             return;
         }
 
-        uint id;
-        try { id = header.GetBlockID(obj); } catch { id = uint.MaxValue; }
-        if (id != uint.MaxValue && !visited.Add(id))
+        int id = NifAccess.BlockId(nif, obj);
+        if (id >= 0 && !visited.Add(id))
         {
             sb.Append(new string(' ', indent * 2)).AppendLine($"… <cycle to block [{id}]>");
             return;
         }
 
-        string typeName = id != uint.MaxValue ? SafeStr(() => header.GetBlockTypeStringById(id)) : "?";
-        string name = SafeStr(() =>
-        {
-            if (obj is NiObjectNET nn && nn.name != null) return nn.name.get();
-            return "";
-        });
+        string typeName = id >= 0 ? BlockTypeName(nif, id) : "?";
+        string name = SafeStr(() => NifAccess.Name(obj));
 
         var line = new StringBuilder();
         line.Append(new string(' ', indent * 2));
-        line.Append("[").Append(id == uint.MaxValue ? "?" : id.ToString()).Append("] ");
+        line.Append('[').Append(id < 0 ? "?" : id.ToString()).Append("] ");
         line.Append(typeName);
         if (!string.IsNullOrEmpty(name)) line.Append(" \"").Append(name).Append('"');
 
         try
         {
-            var t = obj.transform;
-            if (t != null)
+            var t = obj switch
             {
-                var tr = t.translation;
-                if (tr != null) line.AppendFormat("  T=({0:F2},{1:F2},{2:F2})", tr.x, tr.y, tr.z);
-                line.AppendFormat("  S={0:F3}", t.scale);
+                INiShape s => NifAccess.TransformToParent(s),
+                NiAVObject av => NifAccess.TransformToParent(av),
+                _ => (NifAccess.Xform?)null,
+            };
+            if (t is { } x)
+            {
+                line.AppendFormat("  T=({0:F2},{1:F2},{2:F2})", x.T.X, x.T.Y, x.T.Z);
+                line.AppendFormat("  S={0:F3}", x.S);
             }
         }
         catch { }
 
-        if (obj is NiShape shape)
+        if (obj is INiShape shape)
         {
-            try
+            static void Ref(StringBuilder line, string label, INiRef? r)
             {
-                var shaderRef = shape.ShaderPropertyRef();
-                if (shaderRef != null && !shaderRef.IsEmpty()) line.Append("  shader→[").Append(shaderRef.index).Append(']');
+                if (r != null && !r.IsEmpty()) line.Append("  ").Append(label).Append("→[").Append(r.Index).Append(']');
             }
-            catch { }
-            try
-            {
-                var alphaRef = shape.AlphaPropertyRef();
-                if (alphaRef != null && !alphaRef.IsEmpty()) line.Append("  alpha→[").Append(alphaRef.index).Append(']');
-            }
-            catch { }
-            try
-            {
-                var skinRef = shape.SkinInstanceRef();
-                if (skinRef != null && !skinRef.IsEmpty()) line.Append("  skin→[").Append(skinRef.index).Append(']');
-            }
-            catch { }
+            try { Ref(line, "shader", shape.ShaderPropertyRef); } catch { }
+            try { Ref(line, "alpha", shape.AlphaPropertyRef); } catch { }
+            try { Ref(line, "skin", shape.SkinInstanceRef); } catch { }
         }
 
         sb.AppendLine(line.ToString());
 
-        if (obj is NiNode node)
+        if (obj is NiNode node && node.Children != null)
         {
-            NiBlockRefArrayNiAVObject? children = null;
-            try { children = node.GetChildren(); } catch { }
-            if (children != null)
+            foreach (int childId in node.Children.Indices)
             {
-                using var refs = children.GetRefs();
-                if (refs != null)
-                {
-                    int count = refs.Count;
-                    for (int i = 0; i < count; i++)
-                    {
-                        NiRef? cref = null;
-                        try { cref = refs[i]; } catch { }
-                        if (cref == null || cref.IsEmpty()) continue;
-                        NiObject? child = null;
-                        try { child = header.GetBlockById(cref.index); } catch { }
-                        if (child is NiAVObject av) DumpNodeRecursive(sb, header, av, indent + 1, visited);
-                    }
-                }
+                if (childId < 0) continue;
+                INiObject? child = null;
+                try { child = nif.GetBlock(childId); } catch { }
+                if (child is NiAVObject or INiShape) DumpNodeRecursive(sb, nif, child, indent + 1, visited);
             }
         }
     }
@@ -325,17 +286,13 @@ internal static partial class NifDiagnosticDumper
     //  Section 4 — Per-block details (see NifDiagnosticDumper.Blocks.cs)
     // ════════════════════════════════════════════════════════════════════
 
-    private static void DumpAllBlockDetails(StringBuilder sb, NiHeader header, HashSet<string> texturePaths, IRenderLogger logger)
+    private static void DumpAllBlockDetails(StringBuilder sb, NifFile nif, HashSet<string> texturePaths, IRenderLogger logger)
     {
         sb.AppendLine();
         sb.AppendLine("=== Block Details ===");
-        uint n;
-        try { n = header.GetNumBlocks(); }
-        catch (Exception ex) { sb.AppendLine($"  <num blocks read failed: {ex.Message}>"); return; }
-
-        for (uint i = 0; i < n; i++)
+        for (int i = 0; i < nif.Blocks.Count; i++)
         {
-            try { DumpOneBlock(sb, header, i, texturePaths); }
+            try { DumpOneBlock(sb, nif, i, texturePaths); }
             catch (Exception ex) { sb.AppendLine($"  <block [{i}] dump failed: {ex.Message}>"); }
 
             if (sb.Length > 32768) FlushFlush(logger, sb);

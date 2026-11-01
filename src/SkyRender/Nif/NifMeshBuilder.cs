@@ -2,18 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
-using nifly;
-using NiHeader = nifly.NiHeader;
-using NiObject = nifly.NiObject;
+using NiflySharp;
+using NiflySharp.Blocks;
+using NiflySharp.Structs;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = System.Numerics.Vector3;
 using Vector4 = System.Numerics.Vector4;
+using Xform = SkyRender.NifAccess.Xform;
 
 namespace SkyRender;
 
 /// <summary>
-/// Converts NIF file mesh data (via niflysharp) into renderer geometry (Y-up)
-/// for 3D rendering.
+/// Converts NIF file mesh data (parsed by Nifly, read through <see cref="NifAccess"/>) into
+/// renderer geometry (Y-up) for 3D rendering.
 /// </summary>
 public class NifMeshBuilder
 {
@@ -212,7 +213,7 @@ public class NifMeshBuilder
 
         /// <summary>
         /// This shape's ordinal among the source NIF's shape blocks, in file
-        /// block order (the order nifly's <c>GetShapes()</c> returns), counting
+        /// block order (the order <see cref="NifAccess.Shapes"/> returns), counting
         /// every shape — including ones the build later skips or fails. Used as
         /// the "3D Index" fallback when matching a plugin's AlternateTextures
         /// (MODS) entries against a mesh whose shapes were renamed by a rebuild.
@@ -473,8 +474,8 @@ public class NifMeshBuilder
     private const uint SLSF2_BackLighting           = 1u << 27;
 
     /// <summary>
-    /// Pure C# representation of a nifly MatTransform, cached for fast per-vertex
-    /// skinning without SWIG interop overhead in the inner loop.
+    /// A NIF transform (rotation, translation, uniform scale) flattened for fast per-vertex
+    /// skinning.
     /// Stores a 3x3 rotation matrix + translation + uniform scale. Public so hosts can
     /// skin or inverse-map geometry the same way the viewer does (see <see cref="SkinningInfo.BoneTransforms"/>).
     /// </summary>
@@ -632,12 +633,12 @@ public class NifMeshBuilder
     public double ThreadParseMs => _threadParseTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
     public int ThreadParseCount => _threadParseCount;
 
-    // Parse split: of the ThreadParse total, how much is native NifFile.Load (file
-    // parse) vs BuildAllShapes (C#-side per-vertex SWIG marshaling + CPU skinning).
+    // Parse split: of the ThreadParse total, how much is NifFileLoader.TryLoad (file
+    // parse) vs BuildAllShapes (per-vertex geometry reads + CPU skinning).
     // ThreadStatic for the same reason as above — each worker/render thread sees only
     // its own work, so a host can snapshot deltas around a single parse (e.g. PrewarmNpc)
-    // and attribute the split per-NPC. Answers "is the FaceGen head cost in the native
-    // Load or the managed marshaling" without per-block instrumentation overhead.
+    // and attribute the split per-NPC. Answers "is the FaceGen head cost in the parse or
+    // in building the meshes" without per-block instrumentation overhead.
     [ThreadStatic] private static long _threadLoadTicks;
     [ThreadStatic] private static long _threadBuildTicks;
     public double ThreadLoadMs => _threadLoadTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
@@ -649,12 +650,10 @@ public class NifMeshBuilder
     private static long _procLoadTicks, _procBuildTicks, _procGeomTicks, _procSkinTicks;
     private static int _procParseCount;
 
-    // Within BuildAllShapes, split build cost into the geometry SWIG marshaling + per-
-    // element copy loops (verts/normals/uvs/colors/tangents/bitangents/triangles — what a
-    // native bulk-copy helper would eliminate) vs the CPU skinning / shape-transform pass
-    // (which it would not). De-risks the native-helper decision: a high geom share means
-    // the helper directly targets the cost. ThreadStatic, accumulated across all shapes of
-    // a parse; BuildFromFile snapshots the deltas around BuildAllShapes.
+    // Within BuildAllShapes, split build cost into the geometry reads + per-element copy
+    // loops (verts/normals/uvs/colors/tangents/bitangents/triangles) vs the CPU skinning /
+    // shape-transform pass. ThreadStatic, accumulated across all shapes of a parse;
+    // BuildFromFile snapshots the deltas around BuildAllShapes.
     [ThreadStatic] private static long _threadGeomTicks;
     [ThreadStatic] private static long _threadSkinTicks;
 
@@ -769,7 +768,7 @@ public class NifMeshBuilder
     /// render) never pays the skeleton parse. The cache key still uses
     /// <paramref name="skeletonPath"/>, which the caller supplies eagerly, so a
     /// deferred load doesn't change hit/miss behavior.</param>
-    public List<BuiltMesh> BuildFromFile(string nifPath, NifFile? skeletonNif = null, string? skeletonPath = null, string? bipedBodyPart = null, System.Threading.CancellationToken ct = default, Func<NifFile?>? skeletonProvider = null)
+    public List<BuiltMesh> BuildFromFile(string nifPath, LoadedNif? skeletonNif = null, string? skeletonPath = null, string? bipedBodyPart = null, System.Threading.CancellationToken ct = default, Func<LoadedNif?>? skeletonProvider = null)
     {
         long nifMTime = TryGetMTime(nifPath);
         long skelMTime = skeletonPath != null ? TryGetMTime(skeletonPath) : 0;
@@ -795,7 +794,7 @@ public class NifMeshBuilder
         // how much of `build` is parse vs the per-render resolve/clone/morph floor.
         long parseStart = System.Diagnostics.Stopwatch.GetTimestamp();
         var results = new List<BuiltMesh>();
-        using NifFile? nif = NifFileLoader.TryLoad(nifPath, _assetResolver);
+        NifFile? nif = NifFileLoader.TryLoad(nifPath, _assetResolver)?.File;
         long loadTicks = System.Diagnostics.Stopwatch.GetTimestamp() - parseStart;
         if (nif == null)
         {
@@ -817,7 +816,7 @@ public class NifMeshBuilder
 
         long buildStart = System.Diagnostics.Stopwatch.GetTimestamp();
         long geomBefore = _threadGeomTicks, skinBefore = _threadSkinTicks;
-        results = BuildAllShapes(nif, skeletonNif, bipedBodyPart, ct);
+        results = BuildAllShapes(nif, skeletonNif?.File, bipedBodyPart, ct);
         long buildTicks = System.Diagnostics.Stopwatch.GetTimestamp() - buildStart;
         _threadParseTicks += loadTicks + buildTicks;
         _threadLoadTicks += loadTicks;
@@ -1071,13 +1070,13 @@ public class NifMeshBuilder
             return new NifSurveyResult(false, false, null,
                 Array.Empty<NifSurveyShape>(), "file not found: " + (nifPath ?? "(null)"));
 
-        NifFile? loaded;
+        NifFile? nif;
         try
         {
-            loaded = NifFileLoader.TryLoad(nifPath, _assetResolver);
-            if (loaded == null)
+            nif = NifFileLoader.TryLoad(nifPath, _assetResolver)?.File;
+            if (nif == null)
                 return new NifSurveyResult(false, false, null,
-                    Array.Empty<NifSurveyShape>(), "NifFile.Load returned non-zero");
+                    Array.Empty<NifSurveyShape>(), "the NIF did not load");
         }
         catch (Exception ex)
         {
@@ -1085,11 +1084,9 @@ public class NifMeshBuilder
                 Array.Empty<NifSurveyShape>(), "load threw: " + ex.Message);
         }
 
-        using var nif = loaded;
         bool hasFaceGen = DetectFaceGenNif(nif);
 
-        using var shapes = nif.GetShapes();
-        var header = nif.GetHeader();
+        var shapes = NifAccess.Shapes(nif);
 
         // Primary-head election only meaningful inside a FaceGen NIF —
         // matches the gating in BuildAllShapes.
@@ -1113,7 +1110,7 @@ public class NifMeshBuilder
         var entries = new List<NifSurveyShape>(shapes.Count);
         for (int i = 0; i < shapes.Count; i++)
         {
-            try { entries.Add(BuildSurveyShape(nif, header, shapes[i], primaryHeadName)); }
+            try { entries.Add(BuildSurveyShape(nif, shapes[i], primaryHeadName)); }
             catch (Exception ex)
             {
                 // Per-shape failure shouldn't abort the survey.
@@ -1126,13 +1123,12 @@ public class NifMeshBuilder
         return new NifSurveyResult(true, hasFaceGen, primaryHeadName, entries, null);
     }
 
-    private static NifSurveyShape BuildSurveyShape(NifFile nif, NiHeader header,
-        NiShape shape, string? primaryHeadName)
+    private static NifSurveyShape BuildSurveyShape(NifFile nif, INiShape shape, string? primaryHeadName)
     {
-        string shapeName = shape.name?.get() ?? "?";
-        uint flags = shape.flags;
+        string shapeName = NifAccess.Name(shape) ?? "?";
+        uint flags = NifAccess.Flags(nif, shape);
 
-        var partitions = ReadDismemberPartitions(header, shape);
+        var partitions = ReadDismemberPartitions(nif, shape);
         bool hasDismember = partitions != null;
         IReadOnlyList<ushort> partitionList = partitions ?? Array.Empty<ushort>();
 
@@ -1140,43 +1136,32 @@ public class NifMeshBuilder
         // head election uses).
         int vCount = 0;
         float localZ = 0f;
-        using (var verts = nif.GetVertsForShape(shape))
+        NifAccess.Vertices(nif, shape, out var verts);
+        if (verts.Length > 0)
         {
-            if (verts != null && verts.Count > 0)
+            vCount = verts.Length;
+            float minZ = float.MaxValue, maxZ = float.MinValue;
+            for (int j = 0; j < verts.Length; j++)
             {
-                vCount = verts.Count;
-                float minZ = float.MaxValue, maxZ = float.MinValue;
-                for (int j = 0; j < verts.Count; j++)
-                {
-                    float z = verts[j].z;
-                    if (z < minZ) minZ = z;
-                    if (z > maxZ) maxZ = z;
-                }
-                localZ = maxZ - minZ;
+                float z = verts[j].Z;
+                if (z < minZ) minZ = z;
+                if (z > maxZ) maxZ = z;
             }
+            localZ = maxZ - minZ;
         }
 
         // Triangle count
-        int tCount = 0;
-        using (var nifTris = new vectorTriangle())
-        {
-            if (shape.GetTriangles(nifTris)) tCount = nifTris.Count;
-        }
+        int tCount = NifAccess.Triangles(shape, out var nifTris) ? nifTris.Count : 0;
 
-        // Shader type (BSLightingShaderProperty.bslspShaderType, e.g. 5 =
-        // BSLSP_SKINTINT for face shapes). -1 when no BSLSP attached.
+        // Shader type (BSLightingShaderProperty's type, e.g. 5 = SkinTint for
+        // face shapes). -1 when no BSLSP attached.
         int shaderType = -1;
-        var shaderRef = shape.ShaderPropertyRef();
-        if (shaderRef != null && !shaderRef.IsEmpty())
+        try
         {
-            try
-            {
-                NiObject shaderObj = header.GetBlockById(shaderRef.index);
-                if (shaderObj is BSLightingShaderProperty bslsp)
-                    shaderType = (int)bslsp.bslspShaderType;
-            }
-            catch { /* best-effort */ }
+            if (NifAccess.Shader(nif, shape) is BSLightingShaderProperty bslsp)
+                shaderType = (int)bslsp.ShaderType_SK_FO4;
         }
+        catch { /* best-effort */ }
 
         // Slot-0 diffuse texture path, as baked into the NIF (TXST overrides
         // applied later in the build pipeline aren't part of the NIF data
@@ -1185,7 +1170,7 @@ public class NifMeshBuilder
         string? diffuse = null;
         try
         {
-            string slot0 = nif.GetTexturePathByIndex(shape, 0);
+            string slot0 = NifAccess.TexturePath(nif, shape, 0);
             if (!string.IsNullOrWhiteSpace(slot0)) diffuse = slot0;
         }
         catch { /* best-effort */ }
@@ -1281,14 +1266,13 @@ public class NifMeshBuilder
     };
 
     /// <summary>
-    /// Loads all renderable shapes from an already-open NifFile.
-    /// The caller owns the NifFile lifetime.
+    /// Loads all renderable shapes from an already-loaded NIF.
     /// </summary>
-    public List<BuiltMesh> BuildFromNif(NifFile nif, NifFile? skeletonNif = null)
+    public List<BuiltMesh> BuildFromNif(LoadedNif nif, LoadedNif? skeletonNif = null)
     {
         // Path-less / body-part-less entry: no slot context is available, so
         // the dismember-partition filter is disabled (every shape builds).
-        return BuildAllShapes(nif, skeletonNif, bipedBodyPart: null);
+        return BuildAllShapes(nif.File, skeletonNif?.File, bipedBodyPart: null);
     }
 
     /// <summary>
@@ -1299,7 +1283,7 @@ public class NifMeshBuilder
         System.Threading.CancellationToken ct = default)
     {
         var results = new List<BuiltMesh>();
-        using var shapes = nif.GetShapes();
+        var shapes = NifAccess.Shapes(nif);
         if (shapes.Count == 0) return results;
 
         // --- Pre-pass: Find the primary head shape for accessory positioning ---
@@ -1334,18 +1318,17 @@ public class NifMeshBuilder
         var skipped = expectedBipedSlot.HasValue ? new HashSet<int>() : null;
         if (expectedBipedSlot.HasValue)
         {
-            var header = nif.GetHeader();
             for (int si = 0; si < shapes.Count; si++)
             {
                 var shape = shapes[si];
-                var partitions = ReadDismemberPartitions(header, shape);
+                var partitions = ReadDismemberPartitions(nif, shape);
                 if (partitions == null) continue; // No dismember → no filter info, keep
                 if (partitions.Count == 0) continue; // Empty list → keep
                 if (!partitions.Contains(expectedBipedSlot.Value))
                 {
                     skipped!.Add(si);
                     LogVerbose("SkyRender: [BipedFilter] Skipping '"
-                        + (shape.name?.get() ?? "?")
+                        + (NifAccess.Name(shape) ?? "?")
                         + "' partitions=[" + string.Join(",", partitions)
                         + "] — slot " + expectedBipedSlot.Value
                         + " (" + bipedBodyPart + ") not present");
@@ -1407,15 +1390,11 @@ public class NifMeshBuilder
         var found = new List<string>();
         try
         {
-            NiHeader header = nif.GetHeader();
-            uint n = header.GetNumBlocks();
-            for (uint i = 0; i < n; i++)
+            foreach (var blk in nif.Blocks)
             {
-                NiObject? blk = null;
-                try { blk = header.GetBlockById(i); } catch { continue; }
                 if (blk is not NiStringExtraData sed) continue;
                 string? blockName = null, value = null;
-                try { blockName = sed.name?.get(); value = sed.stringData?.get(); } catch { continue; }
+                try { blockName = sed.Name?.String; value = sed.StringData?.String; } catch { continue; }
                 if (string.IsNullOrWhiteSpace(value)) continue;
 
                 bool isPhysicsMarker = string.Equals(blockName, SmpPhysicsExtraDataName,
@@ -1428,7 +1407,7 @@ public class NifMeshBuilder
                     found.Add(trimmed);
             }
         }
-        catch { /* niflib errors fall through as "no physics link" */ }
+        catch { /* read errors fall through as "no physics link" */ }
         return found;
     }
 
@@ -1478,19 +1457,16 @@ public class NifMeshBuilder
     /// keep the shape." Returns an empty list when the dismember instance
     /// exists but has no partitions, which is also treated as keep.</summary>
     /// <summary>The billboard mode of the shape's nearest <c>NiBillboardNode</c> ancestor, or -1.</summary>
-    private static int ReadBillboardMode(NifFile nif, NiShape shape)
+    private static int ReadBillboardMode(NifFile nif, INiShape shape)
     {
         try
         {
-            // GetParentNode hands back a plain NiNode wrapper; the block fetched by id carries the
-            // real type.
-            var header = nif.GetHeader();
-            var parent = nif.GetParentNode(shape);
+            var parent = NifAccess.ParentNode(nif, shape);
             for (int depth = 0; parent != null && depth < 64; depth++)
             {
-                if (header.GetBlockById(header.GetBlockID(parent)) is NiBillboardNode bb)
-                    return (int)bb.billboardMode;
-                parent = nif.GetParentNode(parent);
+                if (parent is NiBillboardNode bb)
+                    return (int)bb.BillboardMode;
+                parent = NifAccess.ParentNode(nif, parent);
             }
         }
         catch { }
@@ -1499,49 +1475,36 @@ public class NifMeshBuilder
 
     /// <summary>The nearest billboard ancestor's frame in NIF root space, converted to the builder's
     /// Y-up output space (see <see cref="BuiltMesh.BillboardFrame"/>), or null.</summary>
-    private Matrix4x4? ReadBillboardFrame(NifFile nif, NiShape shape)
+    private Matrix4x4? ReadBillboardFrame(NifFile nif, INiShape shape)
     {
         try
         {
-            var header = nif.GetHeader();
-            var parent = nif.GetParentNode(shape);
+            var parent = NifAccess.ParentNode(nif, shape);
             for (int depth = 0; parent != null && depth < 64; depth++)
             {
-                if (header.GetBlockById(header.GetBlockID(parent)) is NiBillboardNode)
+                if (parent is NiBillboardNode)
                 {
                     var t = GetTransformToGlobal(nif, parent);
                     // Z-up -> Y-up, the swap every emitted position takes: (x, y, z) -> (x, z, -y).
-                    static Vector3 Up(float x, float y, float z) => new(x, z, -y);
-                    Vector3 Axis(float x, float y, float z)
-                    {
-                        ApplyRotation(t.rotation, x * t.scale, y * t.scale, z * t.scale, out var rx, out var ry, out var rz);
-                        return Up(rx, ry, rz);
-                    }
+                    static Vector3 Up(Vector3 v) => new(v.X, v.Z, -v.Y);
+                    Vector3 Axis(float x, float y, float z) => Up(t.Rotate(new Vector3(x * t.S, y * t.S, z * t.S)));
                     var ax = Axis(1, 0, 0); var ay = Axis(0, 1, 0); var az = Axis(0, 0, 1);
-                    var o = Up(t.translation.x, t.translation.y, t.translation.z);
+                    var o = Up(t.T);
                     return new Matrix4x4(ax.X, ax.Y, ax.Z, 0f, ay.X, ay.Y, ay.Z, 0f,
                                          az.X, az.Y, az.Z, 0f, o.X, o.Y, o.Z, 1f);
                 }
-                parent = nif.GetParentNode(parent);
+                parent = NifAccess.ParentNode(nif, parent);
             }
         }
         catch { }
         return null;
     }
 
-    private static IReadOnlyList<ushort>? ReadDismemberPartitions(NiHeader header, NiShape shape)
+    private static IReadOnlyList<ushort>? ReadDismemberPartitions(NifFile nif, INiShape shape)
     {
-        var skinRef = shape.SkinInstanceRef();
-        if (skinRef == null || skinRef.IsEmpty()) return null;
-        NiObject skinObj = header.GetBlockById(skinRef.index);
-        if (skinObj is not BSDismemberSkinInstance dismember) return null;
-        using var partitions = dismember.partitions;
-        if (partitions == null) return Array.Empty<ushort>();
-        using var items = partitions.items();
-        var ids = new List<ushort>(items.Count);
-        for (int pi = 0; pi < items.Count; pi++)
-            ids.Add(items[pi].partID);
-        return ids;
+        if (NifAccess.Block<INiObject>(nif, shape.SkinInstanceRef) is not BSDismemberSkinInstance dismember) return null;
+        if (dismember.Partitions == null) return Array.Empty<ushort>();
+        return dismember.Partitions.Select(p => (ushort)p.BodyPart).ToList();
     }
 
     /// <summary>
@@ -1588,27 +1551,24 @@ public class NifMeshBuilder
     /// <summary>Per-triangle hideable slots for <see cref="BuiltMesh.TrianglePartitionSlots"/>, or
     /// null when the shape has fewer than two distinct hideable slots (whole-shape slot logic
     /// already covers it) or the partition data does not line up with the shape's triangles.
-    /// nifly's <c>GetShapePartitions</c> returns the skin instance's partition list and, per
+    /// <see cref="NifAccess.Partitions"/> returns the skin instance's partition list and, per
     /// shape triangle (in <c>GetTriangles</c> order, the order <see cref="BuiltMesh.Indices"/>
     /// uses), the index of the partition holding it.</summary>
-    private byte[]? ReadTrianglePartitionSlots(NifFile nif, NiShape shape, int triangleCount)
+    private byte[]? ReadTrianglePartitionSlots(NifFile nif, INiShape shape, int triangleCount)
     {
         try
         {
-            using var info = new NiVectorBSDismemberSkinInstancePartitionInfo();
-            using var triParts = new vectorint();
-            if (!nif.GetShapePartitions(shape, info, triParts)) return null;
+            if (!NifAccess.Partitions(nif, shape, (int)nif.Header.Version.UserVersion, out var partIds, out var triParts)) return null;
             if (triParts.Count != triangleCount) return null;
-            using var items = info.items();
-            var slotOfPartition = new byte[items.Count];
-            for (int pi = 0; pi < items.Count; pi++)
-                slotOfPartition[pi] = (byte)PartitionToHideableSlot(items[pi].partID);
+            var slotOfPartition = new byte[partIds.Count];
+            for (int pi = 0; pi < partIds.Count; pi++)
+                slotOfPartition[pi] = (byte)PartitionToHideableSlot(partIds[pi]);
             return MapTrianglePartitionSlots(slotOfPartition, triParts.ToArray());
         }
         catch (Exception ex)
         {
             LogVerbose("SkyRender: [Partitions] per-triangle partitions unreadable for '"
-                + (shape.name?.get() ?? "?") + "': " + ex.Message);
+                + (NifAccess.Name(shape) ?? "?") + "': " + ex.Message);
             return null;
         }
     }
@@ -1652,21 +1612,12 @@ public class NifMeshBuilder
     {
         try
         {
-            var header = nif.GetHeader();
-            uint n = header.GetNumBlocks();
-            for (uint i = 0; i < n; i++)
+            foreach (var blk in nif.Blocks)
             {
-                NiObject? blk = null;
-                try { blk = header.GetBlockById(i); } catch { continue; }
-                if (blk is NiObjectNET named && named.name != null)
-                {
-                    string? raw = null;
-                    try { raw = named.name.get(); } catch { }
-                    if (raw == "BSFaceGenNiNodeSkinned") return true;
-                }
+                if (blk is NiObjectNET named && NifAccess.Name(named) == "BSFaceGenNiNodeSkinned") return true;
             }
         }
-        catch { /* niflib errors fall through as "not FaceGen" */ }
+        catch { /* read errors fall through as "not FaceGen" */ }
         return false;
     }
 
@@ -1675,46 +1626,43 @@ public class NifMeshBuilder
     /// to get the object's transform in NIF root space (Z-up).
     /// Equivalent to NPC Portrait Creator's GetAVObjectTransformToGlobal.
     /// </summary>
-    private MatTransform GetTransformToGlobal(NifFile nif, NiAVObject obj, string? shapeName = null)
+    private Xform GetTransformToGlobal(NifFile nif, INiObject obj, string? shapeName = null)
     {
-        // GetTransformToParent returns a non-owning wrapper (cMemoryOwn=false),
-        // ComposeTransforms returns an owning copy (cMemoryOwn=true).
-        // Intermediate objects are small and will be cleaned up by the GC finalizer.
-        var result = obj.GetTransformToParent();
-        var parent = nif.GetParentNode(obj);
+        var result = obj is INiShape s ? NifAccess.TransformToParent(s) : NifAccess.TransformToParent((NiAVObject)obj);
+        var parent = NifAccess.ParentNode(nif, obj);
 
         if (shapeName != null)
         {
             LogVerbose("SkyRender: [Transform Chain] '" + shapeName +
-                "' local: T=(" + result.translation.x.ToString("F2") + ", " +
-                result.translation.y.ToString("F2") + ", " + result.translation.z.ToString("F2") +
-                ") S=" + result.scale.ToString("F3") +
-                " rotIdentity=" + result.rotation.IsIdentity());
+                "' local: T=(" + result.T.X.ToString("F2") + ", " +
+                result.T.Y.ToString("F2") + ", " + result.T.Z.ToString("F2") +
+                ") S=" + result.S.ToString("F3") +
+                " rotIdentity=" + result.IsRotationIdentity);
         }
 
         while (parent != null)
         {
-            var parentXform = parent.GetTransformToParent();
+            var parentXform = NifAccess.TransformToParent(parent);
             if (shapeName != null)
             {
-                string parentName = (parent as NiAVObject)?.name?.get() ?? "?";
+                string parentName = NifAccess.Name(parent) ?? "?";
                 LogVerbose("SkyRender: [Transform Chain] '" + shapeName +
                     "' parent '" + parentName +
-                    "': T=(" + parentXform.translation.x.ToString("F2") + ", " +
-                    parentXform.translation.y.ToString("F2") + ", " + parentXform.translation.z.ToString("F2") +
-                    ") S=" + parentXform.scale.ToString("F3") +
-                    " rotIdentity=" + parentXform.rotation.IsIdentity());
+                    "': T=(" + parentXform.T.X.ToString("F2") + ", " +
+                    parentXform.T.Y.ToString("F2") + ", " + parentXform.T.Z.ToString("F2") +
+                    ") S=" + parentXform.S.ToString("F3") +
+                    " rotIdentity=" + parentXform.IsRotationIdentity);
             }
-            result = parentXform.ComposeTransforms(result);
-            parent = nif.GetParentNode(parent);
+            result = parentXform.Compose(result);
+            parent = NifAccess.ParentNode(nif, parent);
         }
 
         if (shapeName != null)
         {
             LogVerbose("SkyRender: [Transform Chain] '" + shapeName +
-                "' composed global: T=(" + result.translation.x.ToString("F2") + ", " +
-                result.translation.y.ToString("F2") + ", " + result.translation.z.ToString("F2") +
-                ") S=" + result.scale.ToString("F3"));
+                "' composed global: T=(" + result.T.X.ToString("F2") + ", " +
+                result.T.Y.ToString("F2") + ", " + result.T.Z.ToString("F2") +
+                ") S=" + result.S.ToString("F3"));
         }
 
         return result;
@@ -1725,41 +1673,22 @@ public class NifMeshBuilder
     /// Also returns the primary head shape's name for tagging in BuiltMesh.
     /// Returns null transform if no head shapes are found (e.g. body NIFs).
     /// </summary>
-    private (MatTransform? offset, string? primaryHeadName) FindAccessoryOffsetAndPrimaryHead(NifFile nif, vectorNiShape shapes)
+    private (Xform? offset, string? primaryHeadName) FindAccessoryOffsetAndPrimaryHead(NifFile nif, List<INiShape> shapes)
     {
-        NiHeader header = nif.GetHeader();
-
         // Collect head-partition candidate shapes with their local Z extent (height)
-        NiShape? primaryHead = null;
+        INiShape? primaryHead = null;
         float primaryHeadHeight = -1f;
 
         for (int si = 0; si < shapes.Count; si++)
         {
             var shape = shapes[si];
-            var skinRef = shape.SkinInstanceRef();
-            if (skinRef == null || skinRef.IsEmpty()) continue;
-
-            NiObject skinObj = header.GetBlockById(skinRef.index);
-            if (skinObj is not BSDismemberSkinInstance dismember) continue;
+            var partIdList = ReadDismemberPartitions(nif, shape);
+            if (partIdList == null) continue;
 
             // Check if any partition is a head partition
-            bool isHeadCandidate = false;
-            var partIdList = new List<ushort>();
-            using var partitions = dismember.partitions;
-            if (partitions != null)
-            {
-                using var items = partitions.items();
-                for (int pi = 0; pi < items.Count; pi++)
-                {
-                    partIdList.Add(items[pi].partID);
-                    if (IsHeadDismemberPartition(items[pi].partID))
-                    {
-                        isHeadCandidate = true;
-                    }
-                }
-            }
+            bool isHeadCandidate = partIdList.Any(IsHeadDismemberPartition);
 
-            string sName = shape.name?.get() ?? "?";
+            string sName = NifAccess.Name(shape) ?? "?";
             LogVerbose("SkyRender: [Skinning] Shape '" + sName +
                 "' partitions=[" + string.Join(",", partIdList) +
                 "] isHeadCandidate=" + isHeadCandidate);
@@ -1767,13 +1696,13 @@ public class NifMeshBuilder
             if (!isHeadCandidate) continue;
 
             // Measure local Z extent to find the tallest (primary) head shape
-            using var verts = nif.GetVertsForShape(shape);
-            if (verts == null || verts.Count == 0) continue;
+            NifAccess.Vertices(nif, shape, out var verts);
+            if (verts.Length == 0) continue;
 
             float minZ = float.MaxValue, maxZ = float.MinValue;
-            for (int vi = 0; vi < verts.Count; vi++)
+            for (int vi = 0; vi < verts.Length; vi++)
             {
-                float z = verts[vi].z;
+                float z = verts[vi].Z;
                 if (z < minZ) minZ = z;
                 if (z > maxZ) maxZ = z;
             }
@@ -1788,35 +1717,34 @@ public class NifMeshBuilder
 
         if (primaryHead == null) return (null, null);
 
-        string headName = primaryHead.name?.get() ?? "?";
+        string headName = NifAccess.Name(primaryHead) ?? "?";
         LogVerbose("SkyRender: Primary head shape identified: '" +
             headName + "' (height=" + primaryHeadHeight.ToString("F1") + ")");
 
         var offset = GetTransformToGlobal(nif, primaryHead, headName + " [primary head]");
         LogVerbose("SkyRender: Accessory offset transform: T=(" +
-            offset.translation.x.ToString("F2") + ", " +
-            offset.translation.y.ToString("F2") + ", " + offset.translation.z.ToString("F2") +
-            ") S=" + offset.scale.ToString("F3"));
+            offset.T.X.ToString("F2") + ", " +
+            offset.T.Y.ToString("F2") + ", " + offset.T.Z.ToString("F2") +
+            ") S=" + offset.S.ToString("F3"));
         return (offset, headName);
     }
 
-    private BuiltMesh? BuildShape(NifFile nif, NiShape shape, MatTransform? accessoryOffset,
+    private BuiltMesh? BuildShape(NifFile nif, INiShape shape, Xform? accessoryOffset,
         NifFile? skeletonNif = null, string? primaryHeadName = null)
     {
         // Skip non-renderable scaffold geometry. Some replacer head NIFs ship "*_Dummy" lens
         // shapes positioned over the eyes as decal anchors; without this skip they
         // upload as untextured opaque quads and occlude the iris.
-        if ((shape.flags & 1u) != 0)
+        if ((NifAccess.Flags(nif, shape) & 1u) != 0)
         {
             LogVerbose("SkyRender: Skipping hidden shape '" +
-                (shape.name?.get() ?? "?") + "' (NiAVObject AppCulled flag set)");
+                (NifAccess.Name(shape) ?? "?") + "' (NiAVObject AppCulled flag set)");
             return null;
         }
-        var preShaderRef = shape.ShaderPropertyRef();
-        if (preShaderRef == null || preShaderRef.IsEmpty())
+        if (shape.ShaderPropertyRef == null || shape.ShaderPropertyRef.IsEmpty())
         {
             LogVerbose("SkyRender: Skipping shape '" +
-                (shape.name?.get() ?? "?") + "' (no shader property attached)");
+                (NifAccess.Name(shape) ?? "?") + "' (no shader property attached)");
             return null;
         }
 
@@ -1827,14 +1755,14 @@ public class NifMeshBuilder
         // faces the camera and goes black on the back-side, producing the
         // "splotches over the torso/neck" symptom. Name-based filtering was
         // rejected because mod authors freely choose collision-shape names.
-        string preDiffuse = nif.GetTexturePathByIndex(shape, 0);
-        string preNormal = nif.GetTexturePathByIndex(shape, 1);
+        string preDiffuse = NifAccess.TexturePath(nif, shape, 0);
+        string preNormal = NifAccess.TexturePath(nif, shape, 1);
         if (string.IsNullOrWhiteSpace(preDiffuse)
             && string.IsNullOrWhiteSpace(preNormal)
-            && !shape.HasAlphaProperty())
+            && !shape.HasAlphaProperty)
         {
             LogVerbose("SkyRender: Skipping shape '" +
-                (shape.name?.get() ?? "?") +
+                (NifAccess.Name(shape) ?? "?") +
                 "' (no diffuse/normal and no alpha property - likely physics/collision mesh)");
             return null;
         }
@@ -1844,22 +1772,21 @@ public class NifMeshBuilder
         long shapeSkinTicks = 0;
 
         // Extract vertices
-        using var nifVerts = nif.GetVertsForShape(shape);
-        if (nifVerts == null || nifVerts.Count == 0)
+        NifAccess.Vertices(nif, shape, out var nifVerts);
+        if (nifVerts.Length == 0)
             return null;
 
         // Extract triangles
-        using var nifTris = new vectorTriangle();
-        if (!shape.GetTriangles(nifTris) || nifTris.Count == 0)
+        if (!NifAccess.Triangles(shape, out var nifTris) || nifTris.Count == 0)
             return null;
 
-        int vertCount = nifVerts.Count;
+        int vertCount = nifVerts.Length;
 
         // Extract normals (may be null)
-        using var nifNormals = nif.GetNormalsForShape(shape);
+        var nifNormals = NifAccess.Normals(nif, shape);
 
         // Extract UVs (may be null)
-        using var nifUvs = nif.GetUvsForShape(shape);
+        var nifUvs = NifAccess.Uvs(nif, shape);
 
         // --- CPU Skinning or Shape Transform ---
         // When a skeleton NIF is provided, CPU-side bone-weight skinning positions
@@ -1872,7 +1799,7 @@ public class NifMeshBuilder
         float[]? skinnedPosX = null, skinnedPosY = null, skinnedPosZ = null;
         float[]? skinnedNrmX = null, skinnedNrmY = null, skinnedNrmZ = null;
 
-        MatTransform? shapeTransform = null;
+        Xform? shapeTransform = null;
         bool hasTransform = false;
         List<string>? unresolvedBones = null;
         List<string>? bonesAbsentFromSkeleton = null;
@@ -1881,7 +1808,7 @@ public class NifMeshBuilder
         // the native-bulk-copy decision can tell apart what the helper fixes (geom copy)
         // from what it doesn't (this block). Mutually exclusive branches.
         long skinStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (skeletonNif != null && shape.HasSkinInstance())
+        if (skeletonNif != null && shape.HasSkinInstance)
         {
             skinning = TryApplyCpuSkinning(nif, shape, nifVerts, nifNormals, vertCount,
                 skeletonNif,
@@ -1894,10 +1821,10 @@ public class NifMeshBuilder
         {
             // Fallback: use shape transform heuristic for unskinned shapes or when no skeleton
             shapeTransform = ComputeEffectiveTransform(nif, shape, accessoryOffset);
-            hasTransform = shapeTransform != null
-                            && (shapeTransform.scale != 1.0f
-                                || !shapeTransform.rotation.IsIdentity()
-                                || !IsZeroTranslation(shapeTransform.translation));
+            hasTransform = shapeTransform is { } st
+                            && (st.S != 1.0f
+                                || !st.IsRotationIdentity
+                                || !IsZeroTranslation(st.T));
         }
         shapeSkinTicks = System.Diagnostics.Stopwatch.GetTimestamp() - skinStart;
 
@@ -1909,7 +1836,7 @@ public class NifMeshBuilder
             for (int i = 0; i < vertCount; i++)
             {
                 var v = nifVerts[i];
-                bindPosePositionsYUp[i] = new Vector3(v.x, v.z, -v.y);
+                bindPosePositionsYUp[i] = new Vector3(v.X, v.Z, -v.Y);
                 positions[i] = new Vector3(skinnedPosX![i], skinnedPosZ![i], -skinnedPosY![i]);
             }
         }
@@ -1918,10 +1845,9 @@ public class NifMeshBuilder
             for (int i = 0; i < vertCount; i++)
             {
                 var v = nifVerts[i];
-                float px = v.x, py = v.y, pz = v.z;
                 if (hasTransform)
-                    ApplyTransform(shapeTransform!, px, py, pz, out px, out py, out pz);
-                positions[i] = new Vector3(px, pz, -py);
+                    v = shapeTransform!.Value.Apply(v);
+                positions[i] = new Vector3(v.X, v.Z, -v.Y);
             }
         }
 
@@ -1932,53 +1858,41 @@ public class NifMeshBuilder
             bindPoseNormalsYUp = new Vector3[vertCount];
             for (int i = 0; i < vertCount; i++)
             {
-                if (nifNormals != null && nifNormals.Count == vertCount)
+                if (nifNormals != null && nifNormals.Length == vertCount)
                 {
                     var n = nifNormals[i];
-                    bindPoseNormalsYUp[i] = new Vector3(n.x, n.z, -n.y);
+                    bindPoseNormalsYUp[i] = new Vector3(n.X, n.Z, -n.Y);
                 }
                 normals[i] = new Vector3(skinnedNrmX[i], skinnedNrmZ![i], -skinnedNrmY![i]);
             }
         }
-        else if (nifNormals != null && nifNormals.Count == vertCount)
+        else if (nifNormals != null && nifNormals.Length == vertCount)
         {
-            bool hasRotation = hasTransform && !shapeTransform!.rotation.IsIdentity();
+            bool hasRotation = hasTransform && !shapeTransform!.Value.IsRotationIdentity;
             for (int i = 0; i < vertCount; i++)
             {
                 var n = nifNormals[i];
-                float nx = n.x, ny = n.y, nz = n.z;
                 if (hasRotation)
-                    ApplyRotation(shapeTransform!.rotation, nx, ny, nz, out nx, out ny, out nz);
-                normals[i] = new Vector3(nx, nz, -ny);
+                    n = shapeTransform!.Value.Rotate(n);
+                normals[i] = new Vector3(n.X, n.Z, -n.Y);
             }
         }
 
         // Build UVs
         var uvs = new Vector2[vertCount];
-        if (nifUvs != null && nifUvs.Count == vertCount)
-        {
-            for (int i = 0; i < vertCount; i++)
-            {
-                var uv = nifUvs[i];
-                uvs[i] = new Vector2(uv.u, uv.v);
-            }
-        }
+        if (nifUvs != null && nifUvs.Length == vertCount)
+            Array.Copy(nifUvs, uvs, vertCount);
 
         // Extract vertex colors from NIF (RGBA, 0–1 range)
         Vector4[]? vertexColors = null;
         bool hasVertexColors = false;
         try
         {
-            using var nifColors = new vectorColor4();
-            if (nif.GetColorsForShape(shape, nifColors) && nifColors.Count == vertCount)
+            var nifColors = NifAccess.Colors(nif, shape);
+            if (nifColors != null && nifColors.Length == vertCount)
             {
                 hasVertexColors = true;
-                vertexColors = new Vector4[vertCount];
-                for (int i = 0; i < vertCount; i++)
-                {
-                    var c = nifColors[i];
-                    vertexColors[i] = new Vector4(c.r, c.g, c.b, c.a);
-                }
+                vertexColors = nifColors;
             }
         }
         catch { /* Shape has no vertex colors */ }
@@ -2005,7 +1919,7 @@ public class NifMeshBuilder
                     nonWhiteCount++;
             }
             int n = vertexColors.Length;
-            string vcShapeName = shape.name?.get() ?? "?";
+            string vcShapeName = NifAccess.Name(shape) ?? "?";
             LogVerbose("SkyRender: [VertexColor] '" + vcShapeName +
                 "' n=" + n +
                 " mean=(" + (sumR / n).ToString("F3") + "," + (sumG / n).ToString("F3") + "," + (sumB / n).ToString("F3") + "," + (sumA / n).ToString("F3") + ")" +
@@ -2015,7 +1929,7 @@ public class NifMeshBuilder
         }
         else
         {
-            string vcShapeName = shape.name?.get() ?? "?";
+            string vcShapeName = NifAccess.Name(shape) ?? "?";
             LogVerbose("SkyRender: [VertexColor] '" + vcShapeName +
                 "' (no vertex color data; uploads (1,1,1,1) per vertex)");
         }
@@ -2025,18 +1939,18 @@ public class NifMeshBuilder
         var bitangents = new Vector3[vertCount];
         try
         {
-            using var nifTangents = nif.GetTangentsForShape(shape);
-            using var nifBitangents = nif.GetBitangentsForShape(shape);
-            if (nifTangents != null && nifTangents.Count == vertCount &&
-                nifBitangents != null && nifBitangents.Count == vertCount)
+            var nifTangents = NifAccess.Tangents(nif, shape);
+            var nifBitangents = NifAccess.Bitangents(nif, shape);
+            if (nifTangents != null && nifTangents.Length == vertCount &&
+                nifBitangents != null && nifBitangents.Length == vertCount)
             {
                 for (int i = 0; i < vertCount; i++)
                 {
                     var t = nifTangents[i];
                     var b = nifBitangents[i];
                     // Z-up → Y-up conversion
-                    tangents[i] = new Vector3(t.x, t.z, -t.y);
-                    bitangents[i] = new Vector3(b.x, b.z, -b.y);
+                    tangents[i] = new Vector3(t.X, t.Z, -t.Y);
+                    bitangents[i] = new Vector3(b.X, b.Z, -b.Y);
                 }
             }
             else
@@ -2055,24 +1969,24 @@ public class NifMeshBuilder
         for (int i = 0; i < nifTris.Count; i++)
         {
             var tri = nifTris[i];
-            indices[i * 3] = tri.p1;
-            indices[i * 3 + 1] = tri.p2;
-            indices[i * 3 + 2] = tri.p3;
+            indices[i * 3] = tri.V1;
+            indices[i * 3 + 1] = tri.V2;
+            indices[i * 3 + 2] = tri.V3;
         }
 
-        // Close the geometry span. Geom = everything from GetVertsForShape through the
+        // Close the geometry span. Geom = everything from the vertex read through the
         // triangle-index loop MINUS the skin/transform pass nested inside it, i.e. the
-        // pure geometry SWIG marshaling + per-element copy the native helper would remove.
+        // geometry reads + per-element copies.
         _threadSkinTicks += shapeSkinTicks;
         _threadGeomTicks += (System.Diagnostics.Stopwatch.GetTimestamp() - geomStart) - shapeSkinTicks;
 
         // Extract texture paths from BSShaderTextureSet
         var texturePaths = new Dictionary<int, string>();
-        for (uint slot = 0; slot < 9; slot++)
+        for (int slot = 0; slot < 9; slot++)
         {
-            string texPath = nif.GetTexturePathByIndex(shape, slot);
+            string texPath = NifAccess.TexturePath(nif, shape, slot);
             if (!string.IsNullOrWhiteSpace(texPath))
-                texturePaths[(int)slot] = texPath;
+                texturePaths[slot] = texPath;
         }
 
         // Extract shader flags and material properties
@@ -2105,11 +2019,11 @@ public class NifMeshBuilder
         uint shaderFlags1 = 0, shaderFlags2 = 0, shaderType = 0;
         try
         {
-            NiHeader header = nif.GetHeader();
-            NiBlockRefNiShader shaderRef = shape.ShaderPropertyRef();
-            if (shaderRef != null && !shaderRef.IsEmpty())
+            if (shape.ShaderPropertyRef != null && !shape.ShaderPropertyRef.IsEmpty())
             {
-                NiObject shaderObj = header.GetBlockById(shaderRef.index);
+                // The concrete block: Nifly's INiShader view answers some values (texture set,
+                // shader type, flags) with interface defaults rather than the file's.
+                var shaderObj = NifAccess.Shader(nif, shape);
                 // Recorded before the BSLSP branch, because it is precisely the shapes that do
                 // NOT take that branch whose material never gets read (see BuiltMesh.HasEffectShader).
                 hasEffectShader = shaderObj is BSEffectShaderProperty;
@@ -2119,100 +2033,86 @@ public class NifMeshBuilder
                     // lighting-shader material, so no existing consumer's view of this shape moves.
                     try
                     {
-                        var bc = besp.baseColor;
-                        if (bc != null)
-                        {
-                            effectBaseColor = new Vector3(bc.r, bc.g, bc.b);
-                            effectBaseColorAlpha = bc.a;
-                        }
-                        effectBaseColorScale = besp.baseColorScale;
+                        var bc = besp.BaseColor;
+                        effectBaseColor = new Vector3(bc.R, bc.G, bc.B);
+                        effectBaseColorAlpha = bc.A;
+                        effectBaseColorScale = besp.BaseColorScale;
                     }
                     catch { }
                     // The rest of the effect material, read the same way: each field on its own so
                     // one failed accessor cannot drop the others.
-                    try { effectFlags1 = besp.shaderFlags1; effectFlags2 = besp.shaderFlags2; } catch { }
+                    try { (effectFlags1, effectFlags2) = NifAccess.ShaderFlags(nif, besp); } catch { }
                     try
                     {
-                        effectFalloff = new Vector4(besp.falloffStartAngle, besp.falloffStopAngle,
-                                                    besp.falloffStartOpacity, besp.falloffStopOpacity);
+                        effectFalloff = new Vector4(besp.FalloffStartAngle, besp.FalloffStopAngle,
+                                                    besp.FalloffStartOpacity, besp.FalloffStopOpacity);
                     }
                     catch { }
-                    try { effectSoftFalloffDepth = besp.softFalloffDepth; } catch { }
-                    // nifly reads the four bytes nif.xml lists after the source texture (Texture
-                    // Clamp Mode, Lighting Influence, Env Map Min LOD, unused) as ONE little-endian
-                    // uint32 named textureClampMode, so lighting influence is its second byte.
+                    try { effectSoftFalloffDepth = besp.SoftFalloffDepth; } catch { }
+                    // nif.xml's Texture Clamp Mode and Lighting Influence bytes, which follow the
+                    // source texture.
                     try
                     {
-                        uint packed = besp.textureClampMode;
-                        effectClampMode = packed & 0xFF;
-                        effectLightingInfluence = ((packed >> 8) & 0xFF) / 255f;
-                    }
-                    catch { }
-                    try
-                    {
-                        var euvs = besp.uvScale;
-                        if (euvs != null) effectUvScale = new Vector2(euvs.u, euvs.v);
-                        var euvo = besp.uvOffset;
-                        if (euvo != null) effectUvOffset = new Vector2(euvo.u, euvo.v);
+                        effectClampMode = besp.TextureClampMode;
+                        effectLightingInfluence = besp.LightingInfluence / 255f;
                     }
                     catch { }
                     try
                     {
-                        string? g = besp.greyscaleTexture?.get();
+                        effectUvScale = new Vector2(besp.UVScale.U, besp.UVScale.V);
+                        effectUvOffset = new Vector2(besp.UVOffset.U, besp.UVOffset.V);
+                    }
+                    catch { }
+                    try
+                    {
+                        string? g = besp.GreyscaleTexture?.Content;
                         if (!string.IsNullOrWhiteSpace(g)) effectGreyscaleTexture = g;
                     }
                     catch { }
                 }
                 if (shaderObj is BSLightingShaderProperty bslsp)
                 {
-                    shaderFlags1 = bslsp.shaderFlags1;
-                    shaderFlags2 = bslsp.shaderFlags2;
-                    shaderType = bslsp.bslspShaderType;
+                    (shaderFlags1, shaderFlags2) = NifAccess.ShaderFlags(nif, bslsp);
+                    shaderType = (uint)bslsp.ShaderType_SK_FO4;
                     isModelSpaceNormals = (shaderFlags1 & SLSF1_ModelSpaceNormals) != 0;
-                    glossiness = bslsp.glossiness;
-                    specularStrength = bslsp.specularStrength;
-                    try { skinTintAlpha = bslsp.skinTintAlpha; } catch { }
+                    glossiness = bslsp.Glossiness;
+                    specularStrength = bslsp.SpecularStrength;
+                    try { skinTintAlpha = NifAccess.SkinTintAlpha(nif, bslsp); } catch { }
                     // Material alpha (< 1 = translucent); used alongside
                     // ZBuffer_Write to decide depth masking in the blend pass.
-                    try { materialAlpha = bslsp.alpha; } catch { }
+                    try { materialAlpha = bslsp.Alpha; } catch { }
 
                     // Extract additional properties safely
-                    try { subsurfaceRolloff = bslsp.subsurfaceRolloff; } catch { }
-                    // niflysharp exposes this via the American spelling `grayscaleToPaletteScale`.
+                    try { subsurfaceRolloff = NifAccess.SubsurfaceRolloff(nif, bslsp); } catch { }
                     // For hair tint shapes the NIF typically stores a value >1 (often 2-4) that
                     // brightens the baked dark HCLR/hairTintColor back up to the actual in-game color.
                     // Without reading it here, hair renders far too dark.
-                    try { greyscaleToPaletteScale = bslsp.grayscaleToPaletteScale; } catch { }
-                    try { rimlightPower = bslsp.rimlightPower; } catch { }
+                    try { greyscaleToPaletteScale = bslsp.GrayscaleToPaletteScale; } catch { }
+                    try { rimlightPower = bslsp.RimlightPower; } catch { }
 
                     // Specular color (RGB)
                     try
                     {
-                        var sc = bslsp.specularColor;
-                        if (sc != null)
-                            specularColor = new Vector3(sc.x, sc.y, sc.z);
+                        var sc = bslsp.SpecularColor;
+                        specularColor = new Vector3(sc.R, sc.G, sc.B);
                     }
                     catch { }
 
-                    // Emissive color and multiplier
+                    // Emissive color and multiplier. A Color3 in the file; Nifly widens it to a
+                    // Color4 whose alpha is a synthetic 0, so only RGB is read.
                     try
                     {
-                        var ec = bslsp.emissiveColor;
-                        if (ec != null)
-                            emissiveColor = new Vector3(ec.x, ec.y, ec.z);
-                        emissiveMultiple = bslsp.emissiveMultiple;
+                        var ec = bslsp.EmissiveColor;
+                        emissiveColor = new Vector3(ec.R, ec.G, ec.B);
+                        emissiveMultiple = bslsp.EmissiveMultiple;
                     }
                     catch { }
 
                     // UV scale and offset
                     try
                     {
-                        var uvsRaw = bslsp.uvScale;
-                        if (uvsRaw != null)
-                            uvScale = new Vector2(uvsRaw.u, uvsRaw.v);
-                        var uvoRaw = bslsp.uvOffset;
-                        if (uvoRaw != null)
-                            uvOffset = new Vector2(uvoRaw.u, uvoRaw.v);
+                        uvScale = new Vector2(bslsp.UVScale.U, bslsp.UVScale.V);
+                        uvOffset = new Vector2(bslsp.UVOffset.U, bslsp.UVOffset.V);
                     }
                     catch { }
 
@@ -2221,28 +2121,27 @@ public class NifMeshBuilder
                     // values like (4, 4) or (8, 8) here so a fine noise
                     // texture reads as fine-detail hair. If a shape that
                     // should tile shows uvScale=(1.00, 1.00) in the log,
-                    // the niflysharp accessor is returning the wrong value
-                    // for that NIF and the texture renders as a single
-                    // stretched copy (chunky / low-detail look).
+                    // the NIF reader is returning the wrong value for that
+                    // NIF and the texture renders as a single stretched
+                    // copy (chunky / low-detail look).
                     if (uvScale.X != 1f || uvScale.Y != 1f ||
                         uvOffset.X != 0f || uvOffset.Y != 0f)
                     {
-                        string sName = shape.name?.get() ?? "?";
+                        string sName = NifAccess.Name(shape) ?? "?";
                         string msg = $"[NifMeshBuilder] shape=[{sName}] uvScale=({uvScale.X:F2}, {uvScale.Y:F2}) uvOffset=({uvOffset.X:F2}, {uvOffset.Y:F2}) shaderType={shaderType}";
                         System.Diagnostics.Debug.WriteLine(msg);
                         System.Diagnostics.Trace.WriteLine(msg);
                     }
 
                     // Environment map scale and eye cubemap scale
-                    try { environmentMapScale = bslsp.environmentMapScale; } catch { }
-                    try { eyeCubemapScale = bslsp.eyeCubemapScale; } catch { }
+                    try { environmentMapScale = bslsp.EnvironmentMapScale; } catch { }
+                    try { eyeCubemapScale = NifAccess.EyeCubemapScale(bslsp); } catch { }
 
-                    if (bslsp.bslspShaderType == (uint)BSLightingShaderPropertyShaderType.BSLSP_HAIRTINT)
+                    if (bslsp.ShaderType_SK_FO4 == NiflySharp.Enums.BSLightingShaderType.HairTint)
                     {
                         isHairTintShader = true;
-                        var tint = bslsp.hairTintColor;
-                        if (tint != null)
-                            hairTintColor = (tint.x, tint.y, tint.z);
+                        var tint = bslsp.HairTintColor;
+                        hairTintColor = (tint.R, tint.G, tint.B);
                     }
 
                     // Decode relevant shader flags for readability
@@ -2258,8 +2157,8 @@ public class NifMeshBuilder
                     bool hasRimLight = (shaderFlags2 & (1u << 26)) != 0;
                     bool hasBackLight = (shaderFlags2 & (1u << 27)) != 0;
 
-                    LogVerbose("SkyRender: Shape '" + (shape.name?.get() ?? "?") + "'" +
-                        " shaderType=" + bslsp.bslspShaderType +
+                    LogVerbose("SkyRender: Shape '" + (NifAccess.Name(shape) ?? "?") + "'" +
+                        " shaderType=" + shaderType +
                         " flags1=0x" + shaderFlags1.ToString("X8") +
                         " flags2=0x" + shaderFlags2.ToString("X8"));
                     LogVerbose("  Flags: MSN=" + isModelSpaceNormals +
@@ -2296,7 +2195,7 @@ public class NifMeshBuilder
         catch (Exception ex)
         {
             LogVerbose("SkyRender: Could not read shader flags for shape '" +
-                (shape.name?.get() ?? "?") + "': " + ex.Message);
+                (NifAccess.Name(shape) ?? "?") + "': " + ex.Message);
         }
 
         // Read NiAlphaProperty for alpha test/blend (brow, hair, and other transparent shapes)
@@ -2312,16 +2211,16 @@ public class NifMeshBuilder
         ushort alphaFlagsRaw = 0;
         try
         {
-            if (shape.HasAlphaProperty())
+            if (shape.HasAlphaProperty)
             {
-                NiHeader alphaHeader = nif.GetHeader();
-                var alphaRef = shape.AlphaPropertyRef();
+                // Straight off the shape's own ref: GetPropertyOfType<T> throws on SE shapes,
+                // whose legacy property list is null.
+                var alphaRef = shape.AlphaPropertyRef;
                 if (alphaRef != null && !alphaRef.IsEmpty())
                 {
-                    NiObject alphaObj = alphaHeader.GetBlockById(alphaRef.index);
-                    if (alphaObj is NiAlphaProperty alphaProp)
+                    if (NifAccess.Block<INiObject>(nif, alphaRef) is NiAlphaProperty alphaProp)
                     {
-                        ushort flags = alphaProp.flags;
+                        ushort flags = alphaProp.Flags.Value;
                         alphaFlagsRaw = flags;
                         // Bit 0 of NiAlphaProperty flags = alpha blend enable
                         hasAlphaBlend = (flags & 1) != 0;
@@ -2335,7 +2234,7 @@ public class NifMeshBuilder
                         // correctly without special-case shader hacks.
                         srcBlendIndex = (flags >> 1) & 0xF;
                         dstBlendIndex = (flags >> 5) & 0xF;
-                        alphaThreshold = alphaProp.threshold / 255f;
+                        alphaThreshold = alphaProp.Threshold / 255f;
 
                         // If alpha property exists but no flags set, default to alpha test
                         // (matches NPC Portrait Creator behavior)
@@ -2350,13 +2249,13 @@ public class NifMeshBuilder
         catch (Exception ex)
         {
             LogVerbose("SkyRender: Could not read NiAlphaProperty for shape '" +
-                (shape.name?.get() ?? "?") + "': " + ex.Message);
+                (NifAccess.Name(shape) ?? "?") + "': " + ex.Message);
         }
 
         // If normals are all zero (missing or unreadable), compute from geometry
         if (AreNormalsAllZero(normals))
         {
-            string dbgName = shape.name?.get() ?? "?";
+            string dbgName = NifAccess.Name(shape) ?? "?";
             LogVerbose("SkyRender: Normals all zero for shape '" +
                 dbgName + "', computing from geometry");
             ComputeNormalsFromGeometry(positions, indices, normals);
@@ -2397,12 +2296,12 @@ public class NifMeshBuilder
             }
         }
 
-        string shapeName = shape.name?.get() ?? $"Shape_{positions.Length}v";
+        string shapeName = NifAccess.Name(shape) ?? $"Shape_{positions.Length}v";
 
         // Capture this shape's dismember partitions so the slot-occupancy
         // resolver can tag baked-in head sub-shapes (e.g. hair = partition 131)
         // by their real biped slot rather than the coarse "Head" group slot.
-        var dismemberPartitions = ReadDismemberPartitions(nif.GetHeader(), shape);
+        var dismemberPartitions = ReadDismemberPartitions(nif, shape);
         var trianglePartitionSlots = dismemberPartitions is { Count: > 1 }
             ? ReadTrianglePartitionSlots(nif, shape, nifTris.Count)
             : null;
@@ -2426,13 +2325,13 @@ public class NifMeshBuilder
         // TEMP DEBUG: dump NIF-space and Y-up-converted normal of vertex 0
         // to diagnose a 90-degree normal orientation mismatch between the
         // body mesh and the armor meshes. Safe to remove once fixed.
-        if (nifNormals != null && nifNormals.Count > 0 && normals.Length > 0)
+        if (nifNormals != null && nifNormals.Length > 0 && normals.Length > 0)
         {
             var nifN0 = nifNormals[0];
             var yupN0 = normals[0];
             LogVerbose(string.Format(
                 "SkyRender: [NORMAL-DEBUG] '{0}' vert0 nifN=({1:F3},{2:F3},{3:F3}) yupN=({4:F3},{5:F3},{6:F3}) skinned={7}",
-                shapeName, nifN0.x, nifN0.y, nifN0.z,
+                shapeName, nifN0.X, nifN0.Y, nifN0.Z,
                 yupN0.X, yupN0.Y, yupN0.Z,
                 skinning != null));
         }
@@ -2520,26 +2419,26 @@ public class NifMeshBuilder
     /// has near-zero translation (accessories like brow, eyes, mouth in FaceGen NIFs),
     /// the primary head's global transform is used instead.
     /// </summary>
-    private MatTransform ComputeEffectiveTransform(NifFile nif, NiShape shape, MatTransform? accessoryOffset)
+    private Xform ComputeEffectiveTransform(NifFile nif, INiShape shape, Xform? accessoryOffset)
     {
-        string shapeName = shape.name?.get() ?? "?";
+        string shapeName = NifAccess.Name(shape) ?? "?";
 
         // Log vertex bounds in local space (before any transform) for diagnostics
-        using var diagVerts = nif.GetVertsForShape(shape);
-        if (diagVerts != null && diagVerts.Count > 0)
+        NifAccess.Vertices(nif, shape, out var diagVerts);
+        if (diagVerts.Length > 0)
         {
             float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
             float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
             float sumX = 0, sumY = 0, sumZ = 0;
-            for (int i = 0; i < diagVerts.Count; i++)
+            for (int i = 0; i < diagVerts.Length; i++)
             {
                 var v = diagVerts[i];
-                sumX += v.x; sumY += v.y; sumZ += v.z;
-                if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
-                if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
-                if (v.z < minZ) minZ = v.z; if (v.z > maxZ) maxZ = v.z;
+                sumX += v.X; sumY += v.Y; sumZ += v.Z;
+                if (v.X < minX) minX = v.X; if (v.X > maxX) maxX = v.X;
+                if (v.Y < minY) minY = v.Y; if (v.Y > maxY) maxY = v.Y;
+                if (v.Z < minZ) minZ = v.Z; if (v.Z > maxZ) maxZ = v.Z;
             }
-            int n = diagVerts.Count;
+            int n = diagVerts.Length;
             LogVerbose("SkyRender: [Skinning] '" + shapeName +
                 "' localVerts(" + n + "): centroid=(" +
                 (sumX / n).ToString("F1") + ", " + (sumY / n).ToString("F1") + ", " + (sumZ / n).ToString("F1") +
@@ -2569,23 +2468,23 @@ public class NifMeshBuilder
         const float ZERO_TRANSLATION_THRESHOLD = 0.1f;
         const float PRETRANSLATED_THRESHOLD = 10.0f;
         float translationLength = (float)Math.Sqrt(
-            globalTransform.translation.x * globalTransform.translation.x +
-            globalTransform.translation.y * globalTransform.translation.y +
-            globalTransform.translation.z * globalTransform.translation.z);
+            globalTransform.T.X * globalTransform.T.X +
+            globalTransform.T.Y * globalTransform.T.Y +
+            globalTransform.T.Z * globalTransform.T.Z);
 
         if (translationLength < ZERO_TRANSLATION_THRESHOLD)
         {
             // Check if vertices are already pre-translated to world space
             float centroidLength = 0f;
-            if (diagVerts != null && diagVerts.Count > 0)
+            if (diagVerts.Length > 0)
             {
                 float sumX = 0, sumY = 0, sumZ = 0;
-                for (int i = 0; i < diagVerts.Count; i++)
+                for (int i = 0; i < diagVerts.Length; i++)
                 {
                     var v = diagVerts[i];
-                    sumX += v.x; sumY += v.y; sumZ += v.z;
+                    sumX += v.X; sumY += v.Y; sumZ += v.Z;
                 }
-                int n = diagVerts.Count;
+                int n = diagVerts.Length;
                 float cx = sumX / n, cy = sumY / n, cz = sumZ / n;
                 centroidLength = (float)Math.Sqrt(cx * cx + cy * cy + cz * cz);
             }
@@ -2602,7 +2501,7 @@ public class NifMeshBuilder
                 "' → APPLYING accessory offset (translationLen=" + translationLength.ToString("F3") +
                 ", centroidLen=" + centroidLength.ToString("F1") +
                 " ≤ threshold=" + PRETRANSLATED_THRESHOLD.ToString("F1") + ")");
-            return accessoryOffset;
+            return accessoryOffset.Value;
         }
 
         LogVerbose("SkyRender: [Skinning] '" + shapeName +
@@ -2611,68 +2510,26 @@ public class NifMeshBuilder
     }
 
     /// <summary>
-    /// Applies a nifly MatTransform (rotation * (point * scale) + translation) to a point.
+    /// Copies a transform into the CachedSkinTransform per-vertex skinning reads.
     /// </summary>
-    private static void ApplyTransform(MatTransform transform, float x, float y, float z,
-        out float rx, out float ry, out float rz)
+    private static CachedSkinTransform ExtractTransform(Xform t)
     {
-        float sx = x * transform.scale;
-        float sy = y * transform.scale;
-        float sz = z * transform.scale;
-
-        using var srcVec = new nifly.Vector3();
-        srcVec.x = sx;
-        srcVec.y = sy;
-        srcVec.z = sz;
-        using var rotated = transform.rotation.opMult(srcVec);
-
-        rx = rotated.x + transform.translation.x;
-        ry = rotated.y + transform.translation.y;
-        rz = rotated.z + transform.translation.z;
-    }
-
-    /// <summary>
-    /// Applies only the rotation component of a transform to a direction vector.
-    /// </summary>
-    private static void ApplyRotation(Matrix3 rotation, float x, float y, float z,
-        out float rx, out float ry, out float rz)
-    {
-        using var srcVec = new nifly.Vector3();
-        srcVec.x = x;
-        srcVec.y = y;
-        srcVec.z = z;
-        using var rotated = rotation.opMult(srcVec);
-        rx = rotated.x;
-        ry = rotated.y;
-        rz = rotated.z;
-    }
-
-    /// <summary>
-    /// Extracts a nifly MatTransform's values into a pure C# CachedSkinTransform,
-    /// avoiding SWIG interop calls during per-vertex skinning.
-    /// </summary>
-    private static CachedSkinTransform ExtractTransform(MatTransform t)
-    {
-        // Extract rotation matrix by multiplying basis vectors.
-        // Matrix3.opMult(e_x) gives (rows[0][0], rows[1][0], rows[2][0]) = column 0.
-        using var ex = new nifly.Vector3(); ex.x = 1;
-        using var ey = new nifly.Vector3(); ey.y = 1;
-        using var ez = new nifly.Vector3(); ez.z = 1;
-
-        using var c0 = t.rotation.opMult(ex);
-        using var c1 = t.rotation.opMult(ey);
-        using var c2 = t.rotation.opMult(ez);
+        // The rotation's columns, as rotation * basis vector (the arithmetic, not a copy of the
+        // rows, so the values match the multiply the renderer was tuned on, signed zeros included).
+        var c0 = t.Rotate(Vector3.UnitX);
+        var c1 = t.Rotate(Vector3.UnitY);
+        var c2 = t.Rotate(Vector3.UnitZ);
 
         return new CachedSkinTransform
         {
             // Reconstruct rows from columns
-            R00 = c0.x, R01 = c1.x, R02 = c2.x,
-            R10 = c0.y, R11 = c1.y, R12 = c2.y,
-            R20 = c0.z, R21 = c1.z, R22 = c2.z,
-            Tx = t.translation.x,
-            Ty = t.translation.y,
-            Tz = t.translation.z,
-            Scale = t.scale,
+            R00 = c0.X, R01 = c1.X, R02 = c2.X,
+            R10 = c0.Y, R11 = c1.Y, R12 = c2.Y,
+            R20 = c0.Z, R21 = c1.Z, R22 = c2.Z,
+            Tx = t.T.X,
+            Ty = t.T.Y,
+            Tz = t.T.Z,
+            Scale = t.S,
         };
     }
 
@@ -2690,12 +2547,10 @@ public class NifMeshBuilder
     ///   - inverse-bind (skinToBone) translation, for cross-reference
     /// </summary>
     private void LogBoneDelta(NifFile meshNif, NifFile skeletonNif, string shapeName,
-        string boneName, MatTransform inverseBind)
+        string boneName, Xform inverseBind)
     {
-        using var skelBoneWorld = new MatTransform();
-        using var meshBoneWorld = new MatTransform();
-        bool hasSkel = skeletonNif.GetNodeTransformToGlobal(boneName, skelBoneWorld);
-        bool hasMesh = meshNif.GetNodeTransformToGlobal(boneName, meshBoneWorld);
+        bool hasSkel = NifAccess.NodeTransformToGlobal(skeletonNif, boneName, out var skelBoneWorld);
+        bool hasMesh = NifAccess.NodeTransformToGlobal(meshNif, boneName, out var meshBoneWorld);
 
         if (!hasSkel || !hasMesh)
         {
@@ -2704,61 +2559,44 @@ public class NifMeshBuilder
             return;
         }
 
-        float dx = skelBoneWorld.translation.x - meshBoneWorld.translation.x;
-        float dy = skelBoneWorld.translation.y - meshBoneWorld.translation.y;
-        float dz = skelBoneWorld.translation.z - meshBoneWorld.translation.z;
+        float dx = skelBoneWorld.T.X - meshBoneWorld.T.X;
+        float dy = skelBoneWorld.T.Y - meshBoneWorld.T.Y;
+        float dz = skelBoneWorld.T.Z - meshBoneWorld.T.Z;
         float mag = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
 
         LogVerbose("SkyRender: [BoneDelta] '" + shapeName + "' bone '" + boneName + "'");
-        LogVerbose("  skel T=(" + skelBoneWorld.translation.x.ToString("F3") + ", " +
-                                           skelBoneWorld.translation.y.ToString("F3") + ", " +
-                                           skelBoneWorld.translation.z.ToString("F3") + ") S=" +
-                                           skelBoneWorld.scale.ToString("F4"));
-        LogVerbose("  mesh T=(" + meshBoneWorld.translation.x.ToString("F3") + ", " +
-                                           meshBoneWorld.translation.y.ToString("F3") + ", " +
-                                           meshBoneWorld.translation.z.ToString("F3") + ") S=" +
-                                           meshBoneWorld.scale.ToString("F4"));
+        LogVerbose("  skel T=(" + skelBoneWorld.T.X.ToString("F3") + ", " +
+                                           skelBoneWorld.T.Y.ToString("F3") + ", " +
+                                           skelBoneWorld.T.Z.ToString("F3") + ") S=" +
+                                           skelBoneWorld.S.ToString("F4"));
+        LogVerbose("  mesh T=(" + meshBoneWorld.T.X.ToString("F3") + ", " +
+                                           meshBoneWorld.T.Y.ToString("F3") + ", " +
+                                           meshBoneWorld.T.Z.ToString("F3") + ") S=" +
+                                           meshBoneWorld.S.ToString("F4"));
         LogVerbose("  Δ T=(" + dx.ToString("F3") + ", " + dy.ToString("F3") + ", " +
                                         dz.ToString("F3") + ") |Δ|=" + mag.ToString("F3"));
-        LogVerbose("  skinToBone T=(" + inverseBind.translation.x.ToString("F3") + ", " +
-                                                 inverseBind.translation.y.ToString("F3") + ", " +
-                                                 inverseBind.translation.z.ToString("F3") + ") S=" +
-                                                 inverseBind.scale.ToString("F4"));
+        LogVerbose("  skinToBone T=(" + inverseBind.T.X.ToString("F3") + ", " +
+                                                 inverseBind.T.Y.ToString("F3") + ", " +
+                                                 inverseBind.T.Z.ToString("F3") + ") S=" +
+                                                 inverseBind.S.ToString("F4"));
     }
 
     // Per-shape bounds diagnostic. Logs each shape's name, partition IDs, which
     // routing branch it went through (skinned vs unskinned fallback), vertex count,
     // and final-position bounds in NIF Z-up space. Helps detect misrouted or
     // mispositioned shapes across the multi-NIF character assembly.
-    private void LogShapeBoundsDiagnostic(NifFile nif, NiShape shape, bool wasSkinned,
+    private void LogShapeBoundsDiagnostic(NifFile nif, INiShape shape, bool wasSkinned,
         Vector3[] positionsYUp, int vertCount)
     {
         if (vertCount == 0) return;
-        string shapeName = shape.name?.get() ?? "?";
+        string shapeName = NifAccess.Name(shape) ?? "?";
 
         // Dismember partition IDs (if any)
         string partStr = "none";
-        var skinRef = shape.SkinInstanceRef();
-        if (skinRef != null && !skinRef.IsEmpty())
+        if (shape.SkinInstanceRef != null && !shape.SkinInstanceRef.IsEmpty())
         {
-            NiHeader header = nif.GetHeader();
-            NiObject skinObj = header.GetBlockById(skinRef.index);
-            if (skinObj is BSDismemberSkinInstance dismember)
-            {
-                var parts = new List<ushort>();
-                using var partitions = dismember.partitions;
-                if (partitions != null)
-                {
-                    using var items = partitions.items();
-                    for (int pi = 0; pi < items.Count; pi++)
-                        parts.Add(items[pi].partID);
-                }
-                partStr = parts.Count == 0 ? "empty" : string.Join(",", parts);
-            }
-            else
-            {
-                partStr = "non-dismember";
-            }
+            var parts = ReadDismemberPartitions(nif, shape);
+            partStr = parts == null ? "non-dismember" : parts.Count == 0 ? "empty" : string.Join(",", parts);
         }
 
         // Y-up → Z-up inverse: Z-up = (x_yUp, -z_yUp, y_yUp)
@@ -2791,8 +2629,8 @@ public class NifMeshBuilder
     /// normals as flat float arrays in NIF Z-up space.
     /// </summary>
     /// <param name="skeletonNif">The loaded skeleton NIF providing real bone world transforms.</param>
-    private SkinningInfo? TryApplyCpuSkinning(NifFile nif, NiShape shape,
-        vectorVector3 nifVerts, vectorVector3? nifNormals, int vertCount,
+    private SkinningInfo? TryApplyCpuSkinning(NifFile nif, INiShape shape,
+        Vector3[] nifVerts, Vector3[]? nifNormals, int vertCount,
         NifFile skeletonNif,
         out float[]? outPosX, out float[]? outPosY, out float[]? outPosZ,
         out float[]? outNrmX, out float[]? outNrmY, out float[]? outNrmZ,
@@ -2808,12 +2646,11 @@ public class NifMeshBuilder
         unresolvedBones = null;
         bonesAbsentFromSkeleton = null;
 
-        string shapeName = shape.name?.get() ?? "?";
-        NiHeader header = nif.GetHeader();
+        string shapeName = NifAccess.Name(shape) ?? "?";
 
         // --- Step 1: Get bone list ---
-        using var boneNames = new vectorstring();
-        uint numBones = nif.GetShapeBoneList(shape, boneNames);
+        var boneNames = NifAccess.BoneNames(nif, shape);
+        uint numBones = (uint)boneNames.Count;
         if (numBones == 0)
         {
             LogVerbose("SkyRender: [Skinning] '" + shapeName + "' has skin instance but no bones");
@@ -2847,8 +2684,7 @@ public class NifMeshBuilder
         int skeletonBones = 0;
         for (uint i = 0; i < numBones; i++)
         {
-            using var inverseBind = new MatTransform();
-            if (!nif.GetShapeBoneTransform(shape, i, inverseBind))
+            if (!NifAccess.SkinToBone(nif, shape, (int)i, out var inverseBind))
             {
                 LogVerbose("SkyRender: [Skinning] '" + shapeName +
                     "' bone " + i + " — no inverse bind-pose, using identity");
@@ -2856,15 +2692,14 @@ public class NifMeshBuilder
             }
 
             string boneName = boneNames[(int)i];
-            using var boneWorld = new MatTransform();
 
             // Try the skeleton NIF first (real bone positions), fall back to the shape's NIF
-            if (skeletonNif.GetNodeTransformToGlobal(boneName, boneWorld))
+            if (NifAccess.NodeTransformToGlobal(skeletonNif, boneName, out var boneWorld))
             {
                 skeletonBones++;
                 boneFromSkeleton[i] = true;
             }
-            else if (!nif.GetNodeTransformToGlobal(boneName, boneWorld))
+            else if (!NifAccess.NodeTransformToGlobal(nif, boneName, out boneWorld))
             {
                 LogVerbose("SkyRender: [Skinning] '" + shapeName +
                     "' bone '" + boneName + "' — not found in skeleton or shape NIF, skipping");
@@ -2880,8 +2715,7 @@ public class NifMeshBuilder
                 LogBoneDelta(nif, skeletonNif, shapeName, boneName, inverseBind);
             }
 
-            using var skinMatrix = boneWorld.ComposeTransforms(inverseBind);
-            boneTransforms[i] = ExtractTransform(skinMatrix);
+            boneTransforms[i] = ExtractTransform(boneWorld.Compose(inverseBind));
             boneResolved[i] = true;
             validBones++;
         }
@@ -2896,27 +2730,24 @@ public class NifMeshBuilder
         }
 
         // --- Step 3: Read per-vertex bone weights from NiSkinData ---
-        var skinRef = shape.SkinInstanceRef();
-        if (skinRef == null || skinRef.IsEmpty()) return null;
+        if (shape.SkinInstanceRef == null || shape.SkinInstanceRef.IsEmpty()) return null;
 
-        NiObject skinObj = header.GetBlockById(skinRef.index);
         // BSDismemberSkinInstance extends NiSkinInstance — try both
-        NiSkinInstance? skinInst = skinObj as NiSkinInstance;
+        NiSkinInstance? skinInst = NifAccess.SkinInstance(nif, shape);
         if (skinInst == null)
         {
             LogVerbose("SkyRender: [Skinning] '" + shapeName + "' skin instance is not NiSkinInstance");
             return null;
         }
 
-        var dataRef = skinInst.dataRef;
+        var dataRef = skinInst.Data;
         if (dataRef == null || dataRef.IsEmpty())
         {
             LogVerbose("SkyRender: [Skinning] '" + shapeName + "' no NiSkinData reference");
             return null;
         }
 
-        NiObject dataObj = header.GetBlockById(dataRef.index);
-        if (dataObj is not NiSkinData skinData)
+        if (NifAccess.Block<INiObject>(nif, dataRef) is not NiSkinData skinData)
         {
             LogVerbose("SkyRender: [Skinning] '" + shapeName + "' block is not NiSkinData");
             return null;
@@ -2926,7 +2757,7 @@ public class NifMeshBuilder
         int[] vertBoneIndices = new int[vertCount * 4];
         float[] vertBoneWeights = new float[vertCount * 4];
 
-        var bonesVec = skinData.bones;
+        var bonesVec = skinData.BoneList;
         if (bonesVec == null)
         {
             LogVerbose("SkyRender: [Skinning] '" + shapeName + "' NiSkinData.bones is null");
@@ -2938,14 +2769,14 @@ public class NifMeshBuilder
         for (int boneIdx = 0; boneIdx < boneCount; boneIdx++)
         {
             var boneData = bonesVec[boneIdx];
-            var vertWeights = boneData.vertexWeights;
+            var vertWeights = boneData.VertexWeights;
             if (vertWeights == null) continue;
 
             for (int wi = 0; wi < vertWeights.Count; wi++)
             {
                 var sw = vertWeights[wi];
-                int vertIdx = sw.index;
-                float weight = sw.weight;
+                int vertIdx = sw.Index;
+                float weight = sw.Weight;
                 if (weight <= 0 || vertIdx >= vertCount) continue;
 
                 // Find an empty slot for this vertex (up to 4 bones per vertex)
@@ -2974,12 +2805,12 @@ public class NifMeshBuilder
         outNrmY = new float[vertCount];
         outNrmZ = new float[vertCount];
 
-        bool hasNormals = nifNormals != null && nifNormals.Count == vertCount;
+        bool hasNormals = nifNormals != null && nifNormals.Length == vertCount;
 
         for (int vi = 0; vi < vertCount; vi++)
         {
             var v = nifVerts[vi];
-            float px = v.x, py = v.y, pz = v.z;
+            float px = v.X, py = v.Y, pz = v.Z;
 
             float accPx = 0, accPy = 0, accPz = 0;
             float accNx = 0, accNy = 0, accNz = 0;
@@ -3000,7 +2831,7 @@ public class NifMeshBuilder
                 if (hasNormals)
                 {
                     var n = nifNormals![vi];
-                    boneTransforms[bIdx].ApplyRotation(n.x, n.y, n.z, out float tnx, out float tny, out float tnz);
+                    boneTransforms[bIdx].ApplyRotation(n.X, n.Y, n.Z, out float tnx, out float tny, out float tnz);
                     accNx += w * tnx;
                     accNy += w * tny;
                     accNz += w * tnz;
@@ -3027,9 +2858,9 @@ public class NifMeshBuilder
                     else
                     {
                         var n = nifNormals![vi];
-                        outNrmX[vi] = n.x;
-                        outNrmY[vi] = n.y;
-                        outNrmZ[vi] = n.z;
+                        outNrmX[vi] = n.X;
+                        outNrmY[vi] = n.Y;
+                        outNrmZ[vi] = n.Z;
                     }
                 }
             }
@@ -3042,9 +2873,9 @@ public class NifMeshBuilder
                 if (hasNormals)
                 {
                     var n = nifNormals![vi];
-                    outNrmX[vi] = n.x;
-                    outNrmY[vi] = n.y;
-                    outNrmZ[vi] = n.z;
+                    outNrmX[vi] = n.X;
+                    outNrmY[vi] = n.Y;
+                    outNrmZ[vi] = n.Z;
                 }
             }
         }
@@ -3059,8 +2890,8 @@ public class NifMeshBuilder
         if (vertCount > 0)
         {
             LogVerbose("SkyRender: [Skinning] '" + shapeName +
-                "' sample vert[0]: bind=(" + nifVerts[0].x.ToString("F2") + "," +
-                nifVerts[0].y.ToString("F2") + "," + nifVerts[0].z.ToString("F2") +
+                "' sample vert[0]: bind=(" + nifVerts[0].X.ToString("F2") + "," +
+                nifVerts[0].Y.ToString("F2") + "," + nifVerts[0].Z.ToString("F2") +
                 ") → skinned=(" + outPosX[0].ToString("F2") + "," +
                 outPosY[0].ToString("F2") + "," + outPosZ[0].ToString("F2") + ")");
         }
@@ -3214,10 +3045,10 @@ public class NifMeshBuilder
         }
     }
 
-    private static bool IsZeroTranslation(nifly.Vector3 v)
+    private static bool IsZeroTranslation(Vector3 v)
     {
         const float eps = 0.0001f;
-        return Math.Abs(v.x) < eps && Math.Abs(v.y) < eps && Math.Abs(v.z) < eps;
+        return Math.Abs(v.X) < eps && Math.Abs(v.Y) < eps && Math.Abs(v.Z) < eps;
     }
 
     /// <summary>
@@ -3315,7 +3146,7 @@ public class NifMeshBuilder
     /// Computes tangents and bitangents from position/normal/UV data using the Lengyel algorithm.
     /// </summary>
     private static void ComputeTangents(Vector3[] positions, Vector3[] normals, Vector2[] uvs,
-        vectorTriangle tris, Vector3[] tangents, Vector3[] bitangents)
+        List<Triangle> tris, Vector3[] tangents, Vector3[] bitangents)
     {
         var tan1 = new Vector3[positions.Length];
         var tan2 = new Vector3[positions.Length];
@@ -3323,7 +3154,7 @@ public class NifMeshBuilder
         for (int i = 0; i < tris.Count; i++)
         {
             var tri = tris[i];
-            int i0 = tri.p1, i1 = tri.p2, i2 = tri.p3;
+            int i0 = tri.V1, i1 = tri.V2, i2 = tri.V3;
             if (i0 >= positions.Length || i1 >= positions.Length || i2 >= positions.Length) continue;
 
             var v0 = positions[i0]; var v1 = positions[i1]; var v2 = positions[i2];

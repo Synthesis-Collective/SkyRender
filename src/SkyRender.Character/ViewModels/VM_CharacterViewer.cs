@@ -3886,7 +3886,7 @@ public partial class VM_CharacterViewer : ViewerVm
             _currentSceneVanillaLooseOverridesModLoose,
             _currentSceneAllowLoadOrderFallback);
 
-        nifly.NifFile? skeletonNif = null;
+        LoadedNif? skeletonNif = null;
         string? skelDiskPath = null;
         var lockTally = new TextureLockTally();
         try
@@ -3932,7 +3932,7 @@ public partial class VM_CharacterViewer : ViewerVm
     /// problems (bones the mesh expects but the skeleton lacks) on
     /// <see cref="MeshOverrideWarnings"/> instead of crashing or silently
     /// rendering a collapsed or misaligned shape.</summary>
-    private void ApplyOneMeshOverride(MeshOverride ov, nifly.NifFile? skeletonNif, string? skelDiskPath,
+    private void ApplyOneMeshOverride(MeshOverride ov, LoadedNif? skeletonNif, string? skelDiskPath,
         TextureLockTally lockTally)
     {
         // Per-override resolution widening (see MeshOverride.AllowLoadOrderFallback).
@@ -5107,7 +5107,7 @@ public partial class VM_CharacterViewer : ViewerVm
         // the cache key regardless of whether the NIF later parses, matching the
         // rule CharacterPreviewCache.PrewarmNpc uses so the keys line up.
         ct.ThrowIfCancellationRequested();
-        nifly.NifFile? skeletonNif = null;
+        LoadedNif? skeletonNif = null;
         string? skelDiskPath = !string.IsNullOrWhiteSpace(meshPaths.SkeletonPath)
             ? _assetResolver.ResolveAssetPath(meshPaths.SkeletonPath)
             : null;
@@ -5116,7 +5116,7 @@ public partial class VM_CharacterViewer : ViewerVm
 
         bool skeletonLoadAttempted = false;
         // Memoized lazy loader handed to BuildFromFile; invoked only on a real parse.
-        nifly.NifFile? LoadSkeleton()
+        LoadedNif? LoadSkeleton()
         {
             if (skeletonLoadAttempted) return skeletonNif;
             skeletonLoadAttempted = true;

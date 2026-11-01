@@ -145,7 +145,7 @@ Submission time is not GPU completion time.
 .nif file on disk
       │
       ▼
-[niflysharp] NifFile.Load(path)
+[Nifly] NifFileLoader.TryLoad(path) → LoadedNif (read through NifAccess)
       │
       ▼
 [Nif/NifMeshBuilder.cs] BuildFromFile / BuildAllShapes / BuildShape
@@ -177,13 +177,13 @@ Submission time is not GPU completion time.
       patches drawn by IRenderOverlay hosts; depth test OFF (always on top)
 ```
 
-The data path is intentionally one-way: niflysharp → POCO → GlMesh → uniforms → GL. There's no round-trip back to the NIF, no in-memory edit of NIF data; the renderer is read-only with respect to the file.
+The data path is intentionally one-way: Nifly → POCO → GlMesh → uniforms → GL. There's no round-trip back to the NIF, no in-memory edit of NIF data; the renderer is read-only with respect to the file.
 
 ---
 
 ## Part 1 — NIF parsing
 
-All NIF reads go through [Nif/NifMeshBuilder.cs](../src/SkyRender/Nif/NifMeshBuilder.cs), which takes a path or an open `NifFile` and returns a list of `BuiltMesh` POCOs. The POCO is a snapshot — once it exists the `NifFile` can be disposed without affecting the renderer.
+All NIF reads go through [Nif/NifMeshBuilder.cs](../src/SkyRender/Nif/NifMeshBuilder.cs), which takes a path or a `LoadedNif` and returns a list of `BuiltMesh` POCOs. It reads the file through [Nif/NifAccess.cs](../src/SkyRender/Nif/NifAccess.cs), which ports the read helpers of the C++ nifly that SkyRender used up to 3.x, so the values match what the renderer was tuned on. The POCO is a snapshot — once it exists the parsed file is no longer needed.
 
 ### Geometry
 
@@ -226,11 +226,11 @@ A shape whose shader property is a `BSEffectShaderProperty` sets `BuiltMesh.HasE
 
 - `baseColor`, `baseColorScale` go to `EffectBaseColor` / `EffectBaseColorAlpha` and `EffectBaseColorScale`.
 - `shaderFlags1/2` go to `EffectShaderFlags1/2`. Same SLSF bit layout; `ShaderFlags1/2` stay zero on effect shapes, as before.
-- `greyscaleTexture` goes to `EffectGreyscaleTexture`. The source texture is slot 0, which nifly maps to `sourceTexture`.
+- `greyscaleTexture` goes to `EffectGreyscaleTexture`. The source texture is slot 0, which `NifAccess.TexturePath` maps to `SourceTexture` (as C++ nifly did).
 - `falloffStart/StopAngle`, `falloffStart/StopOpacity` go to `EffectFalloff`.
 - `softFalloffDepth` goes to `EffectSoftFalloffDepth`.
 - `uvScale`, `uvOffset` go to `EffectUvScale` / `EffectUvOffset`.
-- The texture clamp mode and lighting influence go to `EffectTextureClampMode` and `EffectLightingInfluence`. nifly reads the four bytes nif.xml lists after the source texture (clamp mode, lighting influence, env-map min LOD, unused) as one little-endian `textureClampMode` uint32, so they are split out of it.
+- The texture clamp mode and lighting influence go to `EffectTextureClampMode` and `EffectLightingInfluence`. They are the two bytes nif.xml lists after the source texture (Texture Clamp Mode, Lighting Influence), which Nifly reads as separate fields.
 
 For any shape, `BillboardMode` is the `billboardMode` of the nearest `NiBillboardNode` ancestor (-1 when none). The parent walk fetches each parent by block id, because `GetParentNode` returns an untyped `NiNode` wrapper. `BillboardFrame` is that node's global transform in the builder's output space (Y up): row i the node's local axis i with its scale, row 4 its origin. It is null for skinned shapes and FaceGen accessories, whose vertices do not follow the node's transform chain. These fields feed the [effect shading path](#effect-shaders-bseffectshaderproperty) and [billboards](#billboards).
 
@@ -268,7 +268,7 @@ Per shape that has an `AlphaPropertyRef` (`BuildShape` in [NifMeshBuilder.cs](..
 
 **Observed:** Vanilla `MaleHeadKhajiit` (and likely other beast-race face NIFs) carries `NiAlphaProperty.AlphaTest=True, threshold=73` together with diffuse alpha < 1 across the entire face surface and `SLSF1_Vertex_Alpha` with per-vertex alpha varying down to ~0.325 in a ring around the head/body seam (133 of 1356 vertices on Ri'saad's head). The shader's vertex-alpha-into-texture-alpha multiply produces face fragments with α ≈ 0.27–0.28 along that seam — below the 0.286 threshold — and the GL `discard` drops them. At ~750 px portrait resolution each dropped fragment is a pixel-sized hole that lets the cleared background bleed through; the visible result is the head reading as dimmer or smaller than the body. Vanilla in-game Skyrim does **not** produce this discard pattern.
 
-**Inferred but not verified:** The engine-side mechanism that makes vanilla Khajiit faces render solid. Plausible candidates we haven't traced: the engine ignoring the alpha-test bit on `BSLSP_FACE`, an alpha-to-coverage path running on a differently-configured framebuffer (note that this renderer's Pass-1 deliberately disables `SAMPLE_ALPHA_TO_COVERAGE` per the comment in `GlRenderer.cs`), `BSLSP_FACE` being routed through a separate engine draw call that doesn't read `NiAlphaProperty`, or the actual in-game vertex-alpha values differing from what niflysharp reads back from the NIF. No engine source or Community Shaders' replacement-shader review has been done for this specific path.
+**Inferred but not verified:** The engine-side mechanism that makes vanilla Khajiit faces render solid. Plausible candidates we haven't traced: the engine ignoring the alpha-test bit on `BSLSP_FACE`, an alpha-to-coverage path running on a differently-configured framebuffer (note that this renderer's Pass-1 deliberately disables `SAMPLE_ALPHA_TO_COVERAGE` per the comment in `GlRenderer.cs`), `BSLSP_FACE` being routed through a separate engine draw call that doesn't read `NiAlphaProperty`, or the actual in-game vertex-alpha values differing from what the NIF reader reads back from the NIF. No engine source or Community Shaders' replacement-shader review has been done for this specific path.
 
 Suppressing the discard at `ShaderType == 4` produces output that empirically matches vanilla in-game appearance even though the engine-side mechanism for the match remains open. The face's alpha data still reaches `FragColor.a` (the shader writes it honestly); the off-screen pipeline's alpha-strip at readback handles the downstream PNG consequence (see [Part 2 framebuffer alpha](#final-framebuffer-alpha)). Vertex_alpha-driven head/body seam fade could be reintroduced via a soft-blend path later if a use case appears; the seam is invisible at typical portrait viewing angles.
 
@@ -278,7 +278,7 @@ CPU-side, in [TryApplyCpuSkinning](../src/SkyRender/Nif/NifMeshBuilder.cs). For 
 
 1. Read the bone name list (`nif.GetShapeBoneList`).
 2. Get the inverse bind-pose transform from the **shape NIF** (`nif.GetShapeBoneTransform(shape, i, ...)`).
-3. Get the bone's world transform from the **skeleton NIF** (`skeletonNif.GetNodeTransformToGlobal(boneName)`).
+3. Get the bone's world transform from the **skeleton NIF** (`NifAccess.NodeTransformToGlobal(skeletonNif, boneName)`).
 4. Compose `boneWorld * inverseBind` → cached `CachedSkinTransform` per bone.
 
 Per vertex: read up to 4 bone-weight pairs from `nif.GetShapeBoneWeights(...)`, accumulate the weighted bone transform on the vertex position and (with the rotation portion only) on the normal. The result becomes the renderer's `Positions` array; the original NIF positions are kept as `BindPosePositions` so a host can deform the bind pose and re-skin it.
@@ -296,7 +296,7 @@ In batch rendering (for example a gallery of NPC portraits) parsing NIFs is the 
 - **Parse cache** ([NifMeshBuilder.cs](../src/SkyRender/Nif/NifMeshBuilder.cs) `BuildFromFile`): keyed on `(nifPath, nifMTime, skeletonPath, skelMTime, bipedBodyPart)`, holds cloned `BuiltMesh` snapshots. Shared body parts (`Body`/`Hands`/`Feet`/`Hair`/`Tail`) are LRU-**protected**; the per-NPC FaceGen head and null-part attire/outfit meshes are evicted first (they're one-shot). Measured hit rate ≈ 81% on a ~94-NPC mod.
 - **Prewarm offload** ([GameWindowOffscreenRenderer.cs](../src/SkyRender/Offscreen/GameWindowOffscreenRenderer.cs) `PrewarmAsync` → `IOffscreenSceneBuilder.Prewarm`; for NPC renders `NpcSceneBuilder.Prewarm` → `CharacterPreviewCache.PrewarmNpc`): the GL-free parse + DDS decode run on a thread-pool worker ahead of the single GL render thread, so by the time a tile renders it hits warm caches and the render thread pays only GL upload + draw + readback. After a full prewarm the render thread's own `parseMs` is ≈ 0; the parse cost lives on the workers.
 
-**Where the parse cost goes** (measured, prewarm-worker, ~94-NPC mod; per cache-missed part):
+**Where the parse cost went** (measured on 3.x, when NIFs were read through the niflysharp SWIG bindings; prewarm-worker, ~94-NPC mod; per cache-missed part). 4.0 reads NIFs with the managed Nifly, which removes the per-element marshaling below; see docs/NIFLY_PORT_PLAN.md for the re-measured split:
 
 | Phase | Share of parse | What it is |
 |---|---|---|

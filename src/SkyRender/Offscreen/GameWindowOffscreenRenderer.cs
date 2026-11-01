@@ -111,18 +111,15 @@ public sealed class GameWindowOffscreenRenderer : IOffscreenRenderer
         _logGate = logGate;
         _logger = logger;
 
-        // Prime nifly's block-type factory (a Meyers/function-local-static
-        // singleton) once on this thread before any render or prewarm worker
-        // parses a NIF, so the first concurrent parse can't race the singleton's
-        // lazy initialization. The factory map is populated once in the ctor and
-        // read-only afterward, so concurrent NifFile.Load on separate instances is
-        // safe — which is what PrewarmAsync relies on. Best-effort: a failure here
-        // only forfeits that head start, it doesn't break rendering.
-        try { using (nifly.NiFactoryRegister.Get()) { } }
+        // Prime Nifly's block-type map (built lazily, without a lock, the first time a load meets
+        // a block type) once on this thread before any render or prewarm worker parses a NIF, so
+        // concurrent first parses don't race its initialization. Best-effort: a failure here only
+        // forfeits that head start, it doesn't break rendering.
+        try { NifAccess.WarmUp(); }
         catch (Exception primeEx)
         {
             System.Diagnostics.Debug.WriteLine(
-                "[OffscreenRenderer] NiFactoryRegister prime failed (non-fatal): " + primeEx.Message);
+                "[OffscreenRenderer] NIF reader warm-up failed (non-fatal): " + primeEx.Message);
         }
 
         // Construct the hidden GameWindow on the constructing thread — GLFW

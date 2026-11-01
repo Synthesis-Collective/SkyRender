@@ -37,6 +37,15 @@ internal static class NifAccess
         }
     }
 
+    /// <summary>Saves a one-node SSE NIF to memory and loads it back, so Nifly builds its lazily
+    /// initialized block-type lookup on the calling thread.</summary>
+    public static void WarmUp()
+    {
+        using var stream = new MemoryStream();
+        new NifFile(NiVersion.GetSSE(), withRootNode: true).Save(stream);
+        Load(stream.ToArray());
+    }
+
     // ---- Blocks and names ----
 
     /// <summary>Every shape, in block order (C++ <c>NifFile::GetShapes</c>). Particle systems are
@@ -51,6 +60,11 @@ internal static class NifAccess
         reference == null || reference.IsEmpty() ? null : nif.GetBlock<T>(reference);
 
     public static int BlockId(NifFile nif, INiObject block) => nif.GetBlockIndex(block, out int id) ? id : -1;
+
+    /// <summary>The object's NiAVObject flags. nif.xml stores them as a uint from Bethesda stream 27
+    /// on and a ushort before; C++ nifly keeps either in a uint32.</summary>
+    public static uint Flags(NifFile nif, INiShape shape) =>
+        nif.Header.Version.StreamVersion > 26 ? shape.Flags_ui : shape.Flags_us;
 
     /// <summary>The node whose child list holds <paramref name="child"/>, scanning blocks in order
     /// (C++ <c>NifFile::GetParentNode</c>).</summary>
@@ -74,6 +88,10 @@ internal static class NifAccess
     public readonly record struct Xform(Vector3 T, Vector3 R0, Vector3 R1, Vector3 R2, float S)
     {
         public static readonly Xform Identity = new(Vector3.Zero, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, 1f);
+
+        /// <summary>The rotation is exactly the identity (C++ <c>Matrix3::IsIdentity</c>, an exact
+        /// float comparison).</summary>
+        public bool IsRotationIdentity => R0 == Vector3.UnitX && R1 == Vector3.UnitY && R2 == Vector3.UnitZ;
 
         /// <summary>rotation * v (C++ <c>Matrix3::operator*(Vector3)</c>).</summary>
         public Vector3 Rotate(Vector3 v) => new(
@@ -213,6 +231,43 @@ internal static class NifAccess
         tris = shape.Triangles ?? new List<Triangle>();
         return shape is BSTriShape || shape.Triangles != null;
     }
+
+    // ---- Shader flags ----
+
+    // Nifly keeps a shader's two flag words in per-layout fields (Skyrim before stream 130,
+    // Fallout 4 from it) and zeroes the other layout's; C++ nifly read either into one uint32.
+    public static (uint Flags1, uint Flags2) ShaderFlags(NifFile nif, BSLightingShaderProperty s) =>
+        nif.Header.Version.StreamVersion >= 130
+            ? ((uint)s.ShaderFlags_F4SPF1, (uint)s.ShaderFlags_F4SPF2)
+            : ((uint)s.ShaderFlags_SSPF1, (uint)s.ShaderFlags_SSPF2);
+
+    public static (uint Flags1, uint Flags2) ShaderFlags(NifFile nif, BSEffectShaderProperty s) =>
+        nif.Header.Version.StreamVersion >= 130
+            ? ((uint)s.ShaderFlags_F4SPF1, (uint)s.ShaderFlags_F4SPF2)
+            : ((uint)s.ShaderFlags_SSPF1, (uint)s.ShaderFlags_SSPF2);
+
+    // ---- Lighting-shader fields a stream may not carry ----
+    //
+    // When the file's layout has no such field, C++ nifly kept its class default and the renderer
+    // was tuned on that value; Nifly's default differs. Each returns the field when C++ read it
+    // (BSLightingShaderProperty::Sync in Shaders.cpp) and C++'s default otherwise.
+
+    public static float SubsurfaceRolloff(NifFile nif, BSLightingShaderProperty s)
+    {
+        var v = nif.Header.Version;
+        return v.UserVersion == 12 && v.StreamVersion >= 130 ? s.SubsurfaceRolloff : 0.3f;
+    }
+
+    public static float SkinTintAlpha(NifFile nif, BSLightingShaderProperty s)
+    {
+        var v = nif.Header.Version;
+        int type = (int)s.ShaderType_SK_FO4;
+        bool stored = v.UserVersion == 12 && ((v.StreamVersion == 130 && type == 5) || (v.StreamVersion == 155 && type == 1));
+        return stored ? s.SkinTintAlpha : 0f;
+    }
+
+    public static float EyeCubemapScale(BSLightingShaderProperty s) =>
+        (int)s.ShaderType_SK_FO4 == 16 ? s.EyeCubemapScale : 1f;
 
     // ---- Textures ----
 

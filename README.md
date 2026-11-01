@@ -96,8 +96,8 @@ adaptation; and clouds are not drawn. RENDERING_PIPELINE.md records each compari
 - Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
 - The core is plain `net8.0`; the character tier needs WPF and a Windows platform version of at
   least 10.0.19041 in the host's target framework (for example `net8.0-windows10.0.19041.0`; a
-  plain `-windows` target gets NU1202). USAGE.md's Troubleshooting section explains this and the
-  harmless MSB3246 warning from the NIF library's native DLL.
+  plain `-windows` target gets NU1202); USAGE.md's Troubleshooting section explains this.
+- NIF parsing has no native dependency (the managed Nifly package, since 4.0).
 - GLSL shaders ship embedded in the assembly (and are also copied beside it for local builds), so
   the package works as a `PackageReference` with no extra setup.
 
@@ -118,8 +118,10 @@ every change; Claude wrote the code. No code in the initial release was written 
 
 ## Acknowledgements
 
-SkyRender builds on [nifly](https://github.com/ousnius/nifly) by **ousnius**,
-[NiflySharp](https://github.com/SteveTownsend/niflyswig) by **SteveTownsend**,
+SkyRender builds on [NiflySharp](https://github.com/ousnius/NiflySharp) and
+[nifly](https://github.com/ousnius/nifly) by **ousnius**, the
+[niflysharp bindings](https://github.com/SteveTownsend/niflyswig) by **SteveTownsend** (used up to
+3.x),
 [Mutagen](https://github.com/Mutagen-Modding/Mutagen) by **Noggog**, and
 [Community Shaders](https://github.com/community-shaders/skyrim-community-shaders) by **doodlum** and
 contributors, whose HLSL lighting code was partly ported to GLSL and made character skin tint match

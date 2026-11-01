@@ -508,30 +508,6 @@ build (warning NU1701), so the character tier pins the platform to get the real 
 
 ### Warning MSB3246: "Resolved file has a bad image, no metadata"
 
-Every project that references SkyRender, directly or through SkyRender.Character, reports this
-once. It comes from the niflysharp 1.3.0 package (SkyRender's NIF library): its `lib/net5.0`
-folder holds `niflycpp.dll`, a native DLL, next to the managed `nifly.dll`, so the build offers
-the native one to the compiler as a reference and warns that it has no .NET metadata. It is
-harmless: `niflycpp.dll` is still copied to the output folder, where `nifly.dll` loads it at run
-time.
-
-To silence it, either suppress the code:
-
-```xml
-<PropertyGroup>
-  <NoWarn>$(NoWarn);MSB3246</NoWarn>
-</PropertyGroup>
-```
-
-or, to keep MSB3246 for every other reference, drop just that file from the compile references
-(it stays in the output folder):
-
-```xml
-<Target Name="DropNiflyNativeReference" AfterTargets="ResolveLockFileReferences"
-        BeforeTargets="ResolveAssemblyReferences">
-  <ItemGroup>
-    <Reference Remove="@(Reference)"
-               Condition="'%(Reference.NuGetPackageId)' == 'niflysharp' and '%(Reference.Filename)%(Reference.Extension)' == 'niflycpp.dll'" />
-  </ItemGroup>
-</Target>
-```
+SkyRender 3.x and earlier caused this: their NIF library (niflysharp 1.3.0) shipped a native
+`niflycpp.dll` in its `lib` folder. SkyRender 4.0 reads NIFs with the managed Nifly package and
+has no native dependency, so the warning, and any `NoWarn` or target added to silence it, can go.

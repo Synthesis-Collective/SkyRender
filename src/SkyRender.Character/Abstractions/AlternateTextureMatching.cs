@@ -19,7 +19,7 @@ namespace SkyRender.Character;
 ///   the index — so name-only matching renders such variants in game and the
 ///   CK but not in the preview (untextured/black outfit pieces).</item>
 ///   <item><b>Index desyncs on block re-sort.</b> A shape's ordinal here is its
-///   file block order (nifly <c>GetShapes()</c>), which matches the record's
+///   file block order (<c>NifAccess.Shapes</c>), which matches the record's
 ///   index for Outfit Studio-written files but can be desynced by block-sorting
 ///   tools — observed in the field as an <c>[Index == 1]</c> entry whose named
 ///   shape is the third geometry in the file. Those tools reorder without

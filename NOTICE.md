@@ -14,20 +14,25 @@ SkyRender was created by **Piranha91** together with **Claude**, Anthropic's AI 
 
 SkyRender stands on the work of these projects and their creators.
 
-### Nifly
-
-**ousnius** — [github.com/ousnius/nifly](https://github.com/ousnius/nifly) (GPL-3.0)
-
-The C++ library that reads and writes the Gamebryo/NetImmerse NIF format. Every mesh SkyRender
-renders is parsed by nifly.
-
 ### NiflySharp
 
-**SteveTownsend** — [github.com/SteveTownsend/niflyswig](https://github.com/SteveTownsend/niflyswig)
-(GPL-3.0), packaged as `niflysharp` together with ousnius
+**ousnius** — [github.com/ousnius/NiflySharp](https://github.com/ousnius/NiflySharp) (GPL-3.0),
+packaged as `Nifly`
 
-The SWIG-generated C# bindings that make nifly usable from .NET. SkyRender depends on the
-`niflysharp` package.
+The C# library that reads the Gamebryo/NetImmerse NIF format, a rewrite of ousnius's C++
+[nifly](https://github.com/ousnius/nifly) generated from nif.xml. Every mesh SkyRender renders is
+parsed by it. SkyRender depends on the `Nifly` package.
+
+### nifly and niflysharp
+
+**ousnius** — [github.com/ousnius/nifly](https://github.com/ousnius/nifly) (GPL-3.0), and
+**SteveTownsend** — [github.com/SteveTownsend/niflyswig](https://github.com/SteveTownsend/niflyswig)
+(GPL-3.0)
+
+SkyRender 1.x to 3.x parsed NIFs with the C++ nifly through SteveTownsend's SWIG bindings
+(`niflysharp`). SkyRender 4.0 reproduces that library's behaviour on NiflySharp, porting its read
+helpers (shape order, geometry decoding, texture-path trimming, transforms, skinning and
+partitions) from nifly's C++ source.
 
 ### Mutagen
 
@@ -64,4 +69,4 @@ game.
 ## License
 
 SkyRender is licensed under GPL-3.0-only (see [LICENSE](LICENSE)), which is compatible with the
-GPL-3.0 licences of nifly, NiflySharp and the ported Community Shaders code.
+GPL-3.0 licences of NiflySharp, nifly and the ported Community Shaders code.

@@ -21,7 +21,6 @@ switch (args.FirstOrDefault())
 {
     case "list-mods": return ListMods(opts);
     case "capture": return Capture(opts, dumpIds: null);
-    case "adapter": return Capture(opts, dumpIds: null, adapter: true);
     case "dump": return Capture(opts, dumpIds: File.ReadAllLines(opts.Require("ids")).Where(l => l.Length > 0).ToHashSet());
     case "diff": return Diff(opts);
     case "inspect": return Inspect(opts);
@@ -45,7 +44,7 @@ static int ListMods(Options o)
     return 0;
 }
 
-static int Capture(Options o, HashSet<string>? dumpIds, bool adapter = false)
+static int Capture(Options o, HashSet<string>? dumpIds)
 {
     string data = o.Require("data");
     string? mods = o.Get("mods");
@@ -100,9 +99,7 @@ static int Capture(Options o, HashSet<string>? dumpIds, bool adapter = false)
         () => new Worker(resolver, logger, gate),
         (item, _, worker) =>
         {
-            results[item.Id] = adapter
-                ? worker.RunAdapter(item.Id, item.GamePath, item.LoosePath)
-                : worker.Run(item.Id, item.GamePath, item.LoosePath, dumpDir);
+            results[item.Id] = worker.Run(item.Id, item.GamePath, item.LoosePath, dumpDir);
             int n = Interlocked.Increment(ref done);
             if (n % 2000 == 0) Console.Error.WriteLine($"  {n}/{items.Count} in {clock.Elapsed:hh\\:mm\\:ss}");
             return worker;
@@ -273,23 +270,6 @@ internal sealed class Worker : IDisposable
         {
             _builder.ClearCache();
             return JsonSerializer.Serialize(new { id, status = "threw", error = ex.GetType().Name + ": " + ex.Message, ms = clock.ElapsedMilliseconds, meshes = Array.Empty<object>() });
-        }
-    }
-
-    public string RunAdapter(string id, string gamePath, string? loosePath)
-    {
-        var clock = Stopwatch.StartNew();
-        string path = loosePath ?? _resolver.ResolveAssetSource(gamePath).ResolvedDiskPath ?? gamePath;
-        try
-        {
-            byte[]? bytes = loosePath != null ? File.ReadAllBytes(loosePath)
-                : _resolver.AssetFileExists(path) ? _resolver.ReadResolvedBytes(path) : null;
-            var (status, diffs, shapes) = AdapterDiff.Compare(path, bytes, _resolver);
-            return JsonSerializer.Serialize(new { id, status, shapes, ms = clock.ElapsedMilliseconds, diffs });
-        }
-        catch (Exception ex)
-        {
-            return JsonSerializer.Serialize(new { id, status = "threw", error = ex.GetType().Name + ": " + ex.Message, ms = clock.ElapsedMilliseconds });
         }
     }
 

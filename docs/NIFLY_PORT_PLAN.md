@@ -462,3 +462,70 @@ build a new list on every call. `NifMeshBuilder` should call each one once per s
 6. **Write-side bugs that NPC2 works around:** `RemoveBlock` deleting sibling blocks, NaN tangents
    from `CalcTangentSpace`, and bounding spheres that miss vertices. SkyRender never writes NIFs,
    so none of these apply here.
+
+## Phase 2 and 3 results (2026-10-31)
+
+### The swap
+
+- `niflysharp` is gone from every SkyRender project. Builds contain only the managed
+  `NiflySharp.dll`, and the MSB3246 warning from `niflycpp.dll` is gone with it.
+- Ported to `NifAccess` and `LoadedNif`: `NifFileLoader` (adds `TryReadBytes`),
+  `NifMeshBuilder`, `LodNifReader`, `ReferencePlacement`, the NIF dumper, the character tier
+  (skeleton plumbing), and the offscreen renderer's warm-up.
+  - The dumper's per-block section is now a reflection dump of Nifly's fields, with flags shown
+    by enum name.
+  - The warm-up saves and reloads a one-node NIF, so Nifly builds its lazily initialised
+    block-type map on the main thread.
+- One test was replaced: the SWIG byte-vector test became a `TryReadBytes` copy test. 208 of 208
+  tests pass.
+- Three `BSLightingShaderProperty` fields needed C++'s defaults: `SubsurfaceRolloff` (0.3),
+  `SkinTintAlpha` (0.0) and `EyeCubemapScale` (1.0). Skyrim SE files don't carry them, Nifly's
+  defaults differ, and the renderer was tuned on C++'s. `NifAccess` returns the C++ default
+  whenever the file's layout has no such field.
+- The harness's `adapter` mode is removed (it needed niflysharp); it remains in `91ff581`.
+
+### Meshes: 41,740 files against the 3.1.1 baseline
+
+**41,730 identical.** The other 10 are the expected differences recorded in Phase 1:
+- 9 meshes with NaN UVs, differing only in NaN bit patterns (Windhelm market and temp assets,
+  `seaurielspedestal01`);
+- `hairshorthumanfold.nif`, now `empty` instead of an invisible mesh at the origin.
+
+### Renders and timing (A = frozen 3.1.1, B = the port; alternating runs, machine idle)
+
+**Screenshots:** every CellDemo scene (3 scenes × 5 runs) and every CharacterDemo NPC (7 NPCs × 5
+runs, then 12 NPCs × 3 runs, all clothed) is **pixel-identical** between A and B.
+
+**CellDemo**, medians of 5:
+
+| Scene | Read A | Read B | Change | Wall A | Wall B | Peak memory A → B |
+|---|---|---|---|---|---|---|
+| Bannered Mare | 1,142 ms | 917 ms | −20% | 10.34 s | 10.09 s | 1,557 → 1,507 MB |
+| Dragonsreach | 1,449 ms | 1,086 ms | −25% | 11.42 s | 11.14 s | 1,751 → 1,641 MB |
+| Riverwood (LOD) | 6,082 ms | 3,942 ms | −35% | 19.35 s | 17.23 s | 2,617 → 2,477 MB |
+
+**CharacterDemo** NPC load (records + models + upload):
+- **First pass, 7 NPCs:**
+  - Run 1 (5 runs each): 3,020 → 3,320 ms, +9.9%.
+  - Run 2 (3 runs each, first 7 of 14): 3,060 → 3,190 ms, +4.2%.
+  - Where it comes from:
+    - Records (376 → 374) and models (190 → 181, the base NIF parse) are flat or better.
+    - The increase is in "upload", which also builds the outfit meshes.
+    - Memory is slightly lower on B (managed 357 → 341 MB).
+    - So it is neither parse cost nor GC pressure.
+- **Later NPCs in the same process** (NPCs 8 to 12, warm): 2,260 → 2,160 ms, **−4.4%**.
+- **Reading:** a one-time first-use cost. Each fresh process loads and JIT-compiles Nifly's
+  block types as outfits first bring them in; once warm, B is faster. Within the +10% budget in
+  both measurements, but the first pass is near it, so NPC2 should measure its own first-render
+  path.
+
+**Corpus harness**, per-file wall time across 8 threads: B takes about 5% of A's time in every
+category (FaceGen, armour and clothes, LOD, statics). That's a contention-heavy measurement,
+diagnostic only: the old native library serialised badly under parallel load.
+
+### Prerelease
+
+`SkyRender` and `SkyRender.Character` `4.0.0-nifly.1` (assembly 4.0.0.0) are in
+`S:\Dev\LocalNuGet` for NPC2's A/B testing. They depend on `Nifly >= 1.1.0-0`. Existing pins
+(3.0.1, 3.1.1) never resolve to them. NPC2 records `SkyRenderInfo.Version` in mugshot metadata,
+so 4.0 marks its cached mugshots stale and they get re-rendered.

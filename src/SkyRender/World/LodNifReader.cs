@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
-using nifly;
+using NiflySharp;
+using NiflySharp.Blocks;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = System.Numerics.Vector3;
 using Vector4 = System.Numerics.Vector4;
@@ -52,7 +53,7 @@ public sealed class LodShape
     public IReadOnlyList<(int FirstTriangle, int TriangleCount)> Segments { get; init; } = Array.Empty<(int, int)>();
 }
 
-/// <summary>Reads the shapes of a <c>.btr</c> / <c>.bto</c> file (they are NIFs) through niflysharp.
+/// <summary>Reads the shapes of a <c>.btr</c> / <c>.bto</c> file (they are NIFs) through Nifly.
 /// Shapes with no shader property are skipped, except, with <c>includeWater</c>, the flat LOD water
 /// quads under a terrain block's <c>WATER</c> node (<see cref="LodShape.IsWater"/>).</summary>
 public static class LodNifReader
@@ -63,89 +64,79 @@ public static class LodNifReader
     public static List<LodShape> Read(string diskPath, bool includeWater = false, GameAssetResolver? resolver = null)
     {
         var shapesOut = new List<LodShape>();
-        using var nif = NifFileLoader.TryLoad(diskPath, resolver)
-            ?? throw new InvalidOperationException($"nifly could not load '{diskPath}'");
-        var header = nif.GetHeader();
-        using var shapes = nif.GetShapes();
-        foreach (var shape in shapes)
+        var nif = NifFileLoader.TryLoad(diskPath, resolver)?.File
+            ?? throw new InvalidOperationException($"Could not read '{diskPath}' as a NIF");
+        foreach (var shape in NifAccess.Shapes(nif))
         {
-            // The typed block (GetShader returns the base type, which hides the lighting fields).
-            var shaderRef = shape.ShaderPropertyRef();
-            var shaderObj = shaderRef is null || shaderRef.IsEmpty() ? null : header.GetBlockById(shaderRef.index);
+            // The concrete block (the INiShader view answers type and flags with defaults).
+            var shaderObj = NifAccess.Shader(nif, shape);
             bool isWater = false;
             if (shaderObj is null)
             {
                 // LOD water: no shader; the engine applies the worldspace's LOD water type.
-                if (!includeWater || !string.Equals(nif.GetParentNode(shape)?.name?.get(), WaterNodeName, StringComparison.OrdinalIgnoreCase))
+                if (!includeWater || !string.Equals(NifAccess.Name(NifAccess.ParentNode(nif, shape)), WaterNodeName, StringComparison.OrdinalIgnoreCase))
                     continue;
                 isWater = true;
             }
-            using var verts = nif.GetVertsForShape(shape);
-            using var tris = new vectorTriangle();
-            if (verts is null || verts.Count == 0 || !shape.GetTriangles(tris) || tris.Count == 0) continue;
-            int n = verts.Count;
+            NifAccess.Vertices(nif, shape, out var verts);
+            if (verts.Length == 0 || !NifAccess.Triangles(shape, out var tris) || tris.Count == 0) continue;
+            int n = verts.Length;
 
             var xf = TransformToRoot(nif, shape);
             var pos = new Vector3[n];
-            for (int i = 0; i < n; i++) pos[i] = xf.Point(new Vector3(verts[i].x, verts[i].y, verts[i].z));
+            for (int i = 0; i < n; i++) pos[i] = xf.Point(verts[i]);
 
-            Vector3[]? normals = ReadDirections(nif.GetNormalsForShape(shape), n, xf);
-            Vector3[]? tangents = ReadDirections(nif.GetTangentsForShape(shape), n, xf);
-            Vector3[]? bitangents = ReadDirections(nif.GetBitangentsForShape(shape), n, xf);
+            Vector3[]? normals = ReadDirections(NifAccess.Normals(nif, shape), n, xf);
+            Vector3[]? tangents = ReadDirections(NifAccess.Tangents(nif, shape), n, xf);
+            Vector3[]? bitangents = ReadDirections(NifAccess.Bitangents(nif, shape), n, xf);
 
             var uvs = new Vector2[n];
-            using (var nuv = nif.GetUvsForShape(shape))
-                if (nuv != null && nuv.Count == n)
-                    for (int i = 0; i < n; i++) uvs[i] = new Vector2(nuv[i].u, nuv[i].v);
+            var nuv = NifAccess.Uvs(nif, shape);
+            if (nuv != null && nuv.Length == n) Array.Copy(nuv, uvs, n);
 
             var idx = new int[tris.Count * 3];
             for (int i = 0; i < tris.Count; i++)
             {
                 var t = tris[i];
-                idx[i * 3] = t.p1; idx[i * 3 + 1] = t.p2; idx[i * 3 + 2] = t.p3;
+                idx[i * 3] = t.V1; idx[i * 3 + 1] = t.V2; idx[i * 3 + 2] = t.V3;
             }
 
             uint type = 0, f1 = 0, f2 = 0;
             if (shaderObj is BSLightingShaderProperty bslsp)
             {
-                type = bslsp.bslspShaderType;
-                f1 = bslsp.shaderFlags1;
-                f2 = bslsp.shaderFlags2;
+                type = (uint)bslsp.ShaderType_SK_FO4;
+                (f1, f2) = NifAccess.ShaderFlags(nif, bslsp);
             }
             string? diffuse = isWater ? null : Texture(nif, shape, 0), normal = isWater ? null : Texture(nif, shape, 1);
 
             Vector4[]? colors = null;
             if ((f2 & 0x20u) != 0)   // SLSF2_Vertex_Colors
-                using (var nc = new vectorColor4())
-                    if (nif.GetColorsForShape(shape, nc) && nc.Count == n)
-                    {
-                        colors = new Vector4[n];
-                        for (int i = 0; i < n; i++) colors[i] = new Vector4(nc[i].r, nc[i].g, nc[i].b, nc[i].a);
-                    }
+            {
+                var nc = NifAccess.Colors(nif, shape);
+                if (nc != null && nc.Length == n) colors = nc;
+            }
 
             bool alphaTest = false;
             float threshold = 0f;
-            if (shape.HasAlphaProperty() && shape.AlphaPropertyRef() is { } aref && !aref.IsEmpty() && header.GetBlockById(aref.index) is NiAlphaProperty ap)
+            if (shape.HasAlphaProperty && NifAccess.Block<INiObject>(nif, shape.AlphaPropertyRef) is NiAlphaProperty ap)
             {
-                alphaTest = (ap.flags & 0x200) != 0;   // NiAlphaProperty bit 9: alpha test
-                threshold = ap.threshold / 255f;
+                alphaTest = (ap.Flags.Value & 0x200) != 0;   // NiAlphaProperty bit 9: alpha test
+                threshold = ap.Threshold / 255f;
             }
 
             var segments = new List<(int, int)>();
-            if (header.GetBlockById(nif.GetBlockID(shape)) is BSSubIndexTriShape sit)
+            if (shape is BSSubIndexTriShape sit && sit.Segments != null)
             {
-                using var segs = sit.GetSegments();
-                for (int k = 0; k < segs.Count; k++)
+                foreach (var s in sit.Segments)
                 {
-                    var s = segs[k];
                     // The segment's start is stored in index units (three per triangle).
-                    segments.Add(((int)(s.index / 3), (int)s.numTris));
+                    segments.Add(((int)(s.StartIndex / 3), (int)s.NumPrimitives));
                 }
             }
 
             shapesOut.Add(new LodShape
             {
-                Name = shape.name?.get() ?? "",
+                Name = NifAccess.Name(shape) ?? "",
                 Positions = pos,
                 Normals = normals,
                 Tangents = tangents,
@@ -168,55 +159,41 @@ public static class LodNifReader
         return shapesOut;
     }
 
-    private static string? Texture(NifFile nif, NiShape shape, uint slot)
+    private static string? Texture(NifFile nif, INiShape shape, int slot)
     {
         try
         {
-            string p = nif.GetTexturePathByIndex(shape, slot);
+            string p = NifAccess.TexturePath(nif, shape, slot);
             return string.IsNullOrWhiteSpace(p) ? null : p;
         }
         catch { return null; }
     }
 
-    private static Vector3[]? ReadDirections(vectorVector3? v, int n, Xf xf)
+    private static Vector3[]? ReadDirections(Vector3[]? v, int n, Xf xf)
     {
-        using (v)
+        if (v is null || v.Length != n) return null;
+        var r = new Vector3[n];
+        for (int i = 0; i < n; i++)
         {
-            if (v is null || v.Count != n) return null;
-            var r = new Vector3[n];
-            for (int i = 0; i < n; i++)
-            {
-                var d = xf.Direction(new Vector3(v[i].x, v[i].y, v[i].z));
-                r[i] = d.LengthSquared() > 1e-12f ? Vector3.Normalize(d) : Vector3.UnitZ;
-            }
-            return r;
+            var d = xf.Direction(v[i]);
+            r[i] = d.LengthSquared() > 1e-12f ? Vector3.Normalize(d) : Vector3.UnitZ;
         }
+        return r;
     }
 
-    // The shape's transform to the file root, read out of nifly once so vertices transform in C#.
+    // The shape's transform to the file root, flattened once so vertices transform in plain arithmetic.
     private readonly record struct Xf(Vector3 R0, Vector3 R1, Vector3 R2, Vector3 T, float Scale)
     {
         public Vector3 Direction(Vector3 v) => new(Vector3.Dot(R0, v), Vector3.Dot(R1, v), Vector3.Dot(R2, v));
         public Vector3 Point(Vector3 v) => Direction(v * Scale) + T;
     }
 
-    private static Xf TransformToRoot(NifFile nif, NiAVObject obj)
+    private static Xf TransformToRoot(NifFile nif, INiShape shape)
     {
-        var result = obj.GetTransformToParent();
-        var parent = nif.GetParentNode(obj);
-        while (parent != null)
-        {
-            result = parent.GetTransformToParent().ComposeTransforms(result);
-            parent = nif.GetParentNode(parent);
-        }
-        Vector3 Col(float x, float y, float z)
-        {
-            using var v = new nifly.Vector3 { x = x, y = y, z = z };
-            using var r = result.rotation.opMult(v);
-            return new Vector3(r.x, r.y, r.z);
-        }
-        var c0 = Col(1, 0, 0); var c1 = Col(0, 1, 0); var c2 = Col(0, 0, 1);
+        var result = NifAccess.TransformToGlobal(nif, shape);
+        // The rotation's columns as rotation * basis vector, then regrouped into rows.
+        var c0 = result.Rotate(Vector3.UnitX); var c1 = result.Rotate(Vector3.UnitY); var c2 = result.Rotate(Vector3.UnitZ);
         return new Xf(new Vector3(c0.X, c1.X, c2.X), new Vector3(c0.Y, c1.Y, c2.Y), new Vector3(c0.Z, c1.Z, c2.Z),
-            new Vector3(result.translation.x, result.translation.y, result.translation.z), result.scale);
+            result.T, result.S);
     }
 }

@@ -168,7 +168,7 @@ public class CharacterPreviewCache
     /// caches and pays only GL upload + draw + readback on the render thread.
     /// Intended to run on a worker thread — with the same resolver scopes pushed
     /// as the render (the caller does this) — while the render thread renders a
-    /// different NPC: nifly parsing is thread-safe on separate <c>NifFile</c>
+    /// different NPC: NIF parsing is thread-safe on separate <c>LoadedNif</c>
     /// instances, Pfim decode is per-call safe, and all three caches here are
     /// internally locked.
     ///
@@ -199,7 +199,7 @@ public class CharacterPreviewCache
         // Load the skeleton once (the NifFile instance isn't part of the parse
         // cache key — only its disk path is — so the render's later parse still
         // hits the entries we warm here, even though it loads its own skeleton).
-        nifly.NifFile? skeletonNif = null;
+        LoadedNif? skeletonNif = null;
         string? skelDiskPath = null;
         try
         {
@@ -260,7 +260,7 @@ public class CharacterPreviewCache
         }
     }
 
-    private void PrewarmMeshOverride(MeshOverride ov, nifly.NifFile? skeletonNif,
+    private void PrewarmMeshOverride(MeshOverride ov, LoadedNif? skeletonNif,
         string? skelDiskPath, System.Threading.CancellationToken ct)
     {
         if (ov == null || string.IsNullOrWhiteSpace(ov.MeshPath)) return;
@@ -356,7 +356,7 @@ public class CharacterPreviewCache
     }
 
     private void PrewarmPart(string bodyPart, string? gamePath, ResolvedNpcMeshPaths paths,
-        nifly.NifFile? skeletonNif, string? skelDiskPath, System.Threading.CancellationToken ct)
+        LoadedNif? skeletonNif, string? skelDiskPath, System.Threading.CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(gamePath)) return;
         ct.ThrowIfCancellationRequested();

@@ -1,6 +1,5 @@
 using System;
 using System.Text;
-using nifly;
 
 namespace SkyRender;
 
@@ -23,20 +22,19 @@ public static class NifDumpApi
     /// </summary>
     public static string DumpFileToString(string nifPath)
     {
-        using var nif = new NifFile();
-        if (nif.Load(nifPath) != 0)
-            throw new InvalidOperationException($"nifly failed to parse '{nifPath}' (Load returned non-zero).");
+        var nif = NifFileLoader.TryLoad(nifPath, resolver: null)
+            ?? throw new InvalidOperationException($"Could not read '{nifPath}' as a NIF.");
         return DumpToString(nif, nifPath);
     }
 
     /// <summary>
-    /// Returns the full diagnostic dump of an already-loaded <see cref="NifFile"/>.
+    /// Returns the full diagnostic dump of an already-loaded NIF.
     /// </summary>
-    public static string DumpToString(NifFile nif, string nifPath)
+    public static string DumpToString(LoadedNif nif, string nifPath)
     {
         ArgumentNullException.ThrowIfNull(nif);
         var collector = new StringCollectorLogger();
-        NifDiagnosticDumper.Dump(nif, nifPath, collector, assetResolver: null);
+        NifDiagnosticDumper.Dump(nif.File, nifPath, collector, assetResolver: null);
         return collector.ToString();
     }
 
