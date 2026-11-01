@@ -17,6 +17,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="SkyRender.Character" />
     <InternalsVisibleTo Include="SkyRender.Tests" />
+    <InternalsVisibleTo Include="SkyRender.Core.Tests" />
     <!-- tools/NifSnapshot, the dev-only corpus harness, reads NIFs through NifAccess. -->
     <InternalsVisibleTo Include="NifSnapshot" />
   </ItemGroup>

@@ -529,3 +529,20 @@ diagnostic only: the old native library serialised badly under parallel load.
 `S:\Dev\LocalNuGet` for NPC2's A/B testing. They depend on `Nifly >= 1.1.0-0`. Existing pins
 (3.0.1, 3.1.1) never resolve to them. NPC2 records `SkyRenderInfo.Version` in mugshot metadata,
 so 4.0 marks its cached mugshots stale and they get re-rendered.
+
+### Linux job
+
+- `tests/SkyRender.Core.Tests` (`net10.0`, core only) runs in `.github/workflows/linux.yml` on
+  `ubuntu-latest`. It holds:
+  - `NifRoundTripTests`: SSE NIFs authored with Nifly in the test (a textured quad under a root
+    node), saved to bytes and read back through `NifAccess.Load`, `NifFileLoader` and
+    `NifMeshBuilder.BuildFromNif`. They check the geometry, C++-style texture-path trimming,
+    the parent transform, file loading, and rejection of non-NIF bytes.
+  - The core test files of `SkyRender.Tests`, compiled in by link. `InMemoryBsaAssetTests`
+    stays Windows-only, because its archive paths use backslashes.
+- Locally on Windows: 97 of 97 pass; the full solution still passes 208 of 208.
+- Authoring trap: Nifly's `BSTriShape` constructor sets the `Skinned` vertex flag. An SSE write
+  of a skinned shape leaves the geometry to the skin partition, so an unskinned shape authored
+  with it saves with no vertices unless `IsSkinned = false`. (NiflySharp 1.1.0,
+  `Blocks/BSTriShape.cs`, `BeforeSync`.)
+- Not run on Linux yet: the job needs a push.

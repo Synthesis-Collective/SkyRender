@@ -1,0 +1,19 @@
+# Builds the core SkyRender library and runs its tests on Linux, where NIF parsing must work
+# without any native dependency. SkyRender.Character (WPF) and the samples are Windows-only and
+# stay out of this job; the release workflow builds and tests everything on Windows.
+name: linux
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - run: dotnet test tests/SkyRender.Core.Tests -c Release
