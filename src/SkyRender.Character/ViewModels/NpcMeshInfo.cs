@@ -29,6 +29,15 @@ public sealed class NpcMeshInfo
     /// (the MeshOverride.Key they came from); null for base NPC shapes. Lets a re-applied override
     /// set find and tear down the shapes the previous set created.</summary>
     public string? OverrideKey { get; set; }
+
+    /// <summary>Partition slots of this worn shape that its ArmorAddon does not list, so the game
+    /// never draws them (see <see cref="PartitionOcclusion.UnclaimedSlots"/>). 0 for base shapes and
+    /// for pieces whose partitions all match their slots.</summary>
+    public int UnclaimedPartitionSlots { get; set; }
+
+    /// <summary>True when every partition of this worn shape is unclaimed, so the whole shape is
+    /// hidden: a stray BodySlide reference body left in an earring NIF.</summary>
+    public bool AllPartitionsUnclaimed { get; set; }
 }
 
 /// <summary>
@@ -72,6 +81,33 @@ public static class PartitionOcclusion
             hidden |= shared;
         }
         return hidden;
+    }
+
+    /// <summary>
+    /// Partition slots (BipedObjectFlag bits) of a worn piece's shape that the piece's ArmorAddon
+    /// does not list in <paramref name="armaSlots"/>. The game does not draw such a partition at
+    /// all, whatever else is worn: an earring ArmorAddon on slot 43 whose NIF also carries a
+    /// leftover SBP_32_BODY reference body shows only the earring. Checked in game by retagging
+    /// that body shape: as 43 it drew over the face, as an unworn 49 it stayed hidden.
+    /// <para>Only the 30-61 IDs count. The 130-161 duplicates and the 230-range head IDs are left
+    /// drawn, as that rule has not been checked for them. <paramref name="allUnclaimed"/> is true
+    /// when the shape has partitions and every one is an unclaimed 30-61 slot, so none of it is
+    /// drawn.</para>
+    /// </summary>
+    public static int UnclaimedSlots(IReadOnlyList<ushort>? partitionIds, int armaSlots, out bool allUnclaimed)
+    {
+        allUnclaimed = false;
+        if (partitionIds == null || partitionIds.Count == 0) return 0;
+        int mask = 0;
+        bool all = true;
+        foreach (ushort id in partitionIds)
+        {
+            int bit = id is >= 30 and <= 61 ? 1 << (id - 30) : 0;
+            if (bit != 0 && (armaSlots & bit) == 0) mask |= bit;
+            else all = false;
+        }
+        allUnclaimed = all;
+        return mask;
     }
 
     /// <summary>Union of <see cref="HiddenSlots(NpcMeshInfo, NpcMeshInfo)"/> over every

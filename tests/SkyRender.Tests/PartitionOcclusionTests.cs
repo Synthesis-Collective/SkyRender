@@ -145,4 +145,43 @@ public class PartitionOcclusionTests
         PartitionOcclusion.HiddenSlots(CuirassSkin, skinOverride).Should().Be(0);
         PartitionOcclusion.HiddenSlots(Boots, body).Should().Be(0);
     }
+
+    [Fact]
+    public void UnclaimedSlots_StrayBodyInEarring_HidesWholeShape()
+    {
+        // Priestess of the Time Earring.nif: a BodySlide reference body (two SBP_32_BODY
+        // partitions) inside an ArmorAddon that lists slot 43 only.
+        PartitionOcclusion.UnclaimedSlots(new ushort[] { 32, 32 }, Bit(43), out bool all).Should().Be(Bit(32));
+        all.Should().BeTrue();
+    }
+
+    [Fact]
+    public void UnclaimedSlots_ListedPartitions_AreDrawn()
+    {
+        PartitionOcclusion.UnclaimedSlots(new ushort[] { 32, 38, 34 }, Bits(32, 34, 38), out bool all).Should().Be(0);
+        all.Should().BeFalse();
+    }
+
+    [Fact]
+    public void UnclaimedSlots_MixedShape_HidesOnlyTheUnlistedSlot()
+    {
+        PartitionOcclusion.UnclaimedSlots(new ushort[] { 43, 32 }, Bit(43), out bool all).Should().Be(Bit(32));
+        all.Should().BeFalse();
+    }
+
+    [Fact]
+    public void UnclaimedSlots_HeadRangeIds_AreNeverHidden()
+    {
+        PartitionOcclusion.UnclaimedSlots(new ushort[] { 131, 230, 0 }, Bit(43), out bool all).Should().Be(0);
+        all.Should().BeFalse();
+    }
+
+    [Fact]
+    public void UnclaimedSlots_NoPartitions_HidesNothing()
+    {
+        PartitionOcclusion.UnclaimedSlots(null, Bit(43), out bool none).Should().Be(0);
+        none.Should().BeFalse();
+        PartitionOcclusion.UnclaimedSlots(new ushort[0], Bit(43), out bool empty).Should().Be(0);
+        empty.Should().BeFalse();
+    }
 }
