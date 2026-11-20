@@ -4321,6 +4321,19 @@ public partial class VM_CharacterViewer : ViewerVm
             glMesh.Npc().BipedSlots = ov.BipedSlots;
             glMesh.Npc().HidesSlots = ov.EffectiveHidesSlots;
             glMesh.Npc().SlotDrawPriority = SlotDrawPriorityForKind(ov.Kind);
+            if (ov.Kind == MeshOverrideKind.Armor || ov.Kind == MeshOverrideKind.Headgear)
+            {
+                glMesh.Npc().UnclaimedPartitionSlots = PartitionOcclusion.UnclaimedSlots(
+                    b.DismemberPartitions, ov.BipedSlots, out bool allUnclaimed);
+                glMesh.Npc().AllPartitionsUnclaimed = allUnclaimed;
+                if (glMesh.Npc().UnclaimedPartitionSlots != 0)
+                {
+                    LogVerbose("SkyRender: [Partitions] '" + glMesh.ShapeName + "' of '" + ov.Key
+                        + "' has partition slot(s) its ArmorAddon does not list ("
+                        + string.Join(",", Enumerable.Range(30, 32).Where(s => (glMesh.Npc().UnclaimedPartitionSlots & (1 << (s - 30))) != 0))
+                        + (allUnclaimed ? "); the whole shape is hidden" : "); those triangles are hidden"));
+                }
+            }
             glMesh.ShowWireframe = ShowWireframe;
             ApplyTextureVisibilityLock(glMesh, lockTally);
             Renderer.AddMesh(glMesh);
@@ -4576,11 +4589,13 @@ public partial class VM_CharacterViewer : ViewerVm
     /// Body armor (priority 1) hides the base body (priority 0); headgear
     /// (priority 2) hides hair (priority 0). Only the slot-hiding flag is
     /// touched — missing-texture culling (<see cref="GlMesh.IsRendering"/>) is
-    /// left alone, and both combine in <see cref="GlMesh.ShouldRender"/>.</summary>
+    /// left alone, and both combine in <see cref="GlMesh.ShouldRender"/>.
+    /// A worn shape whose partitions its ArmorAddon does not list is never drawn
+    /// (<see cref="NpcMeshInfo.AllPartitionsUnclaimed"/>), as in game.</summary>
     private void ResolveSlotVisibility()
     {
         var meshes = Renderer.Meshes;
-        foreach (var m in meshes) m.IsHiddenByHost = false;
+        foreach (var m in meshes) m.IsHiddenByHost = m.Npc().AllPartitionsUnclaimed;
 
         foreach (var occluder in meshes)
         {
@@ -4599,11 +4614,12 @@ public partial class VM_CharacterViewer : ViewerVm
         // Partition hiding inside the shapes still drawn: a worn piece's dismember-partition
         // triangles of a slot another piece covers (an armor skin's calves under boots). Only
         // shapes split across two or more hideable partitions carry the per-triangle data; the
-        // renderer re-uploads a shape's index buffer when its mask changes.
+        // renderer re-uploads a shape's index buffer when its mask changes. Partitions the
+        // piece's own ArmorAddon does not list are hidden too.
         foreach (var m in meshes)
         {
             if (m.TrianglePartitionSlots == null) continue;
-            int mask = m.IsHiddenByHost ? 0 : PartitionOcclusion.HiddenSlots(
+            int mask = m.IsHiddenByHost ? 0 : m.Npc().UnclaimedPartitionSlots | PartitionOcclusion.HiddenSlots(
                 m.Npc(), meshes.Where(o => !ReferenceEquals(o, m) && o.ShouldRender).Select(o => o.Npc()));
             if (mask != m.HiddenPartitionSlots && mask != 0)
             {
