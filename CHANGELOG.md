@@ -83,6 +83,12 @@ Screenshots of the sample scenes and NPCs match 3.1.1 pixel for pixel.
     render mode, and `--bench DIR` logs still, orbit, look and fly with no hand on the mouse. Its
     `--fps-log` columns are now `FrameStats.CsvHeader`.
 
+### Fixed
+
+- Armor and headgear no longer draw dismember partitions whose slot their ArmorAddon does not
+  list, as the game does. A shape made only of such partitions is hidden whole; a multi-slot
+  shape hides those triangles. (A leftover BodySlide body in an earring mesh drew over the face.)
+
 ### Removed
 
 - The native-vector fast path for in-memory NIFs (`NifFileLoader`'s one-copy fill of
