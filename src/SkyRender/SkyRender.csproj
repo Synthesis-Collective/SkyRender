@@ -26,12 +26,15 @@
     <!-- OpenGL bindings, maths and the GLFW window the offscreen renderer draws into. 4.8.2 is the
          version OpenTK.GLWpfControl 4.3.3 resolves, so the character tier sees one OpenTK. -->
     <PackageReference Include="OpenTK" Version="4.8.2" />
-    <!-- NIF reading: Nifly, ousnius's managed nifly (cross-platform). The minimum is 1.1.0-0, not
+    <!-- NIF reading: Nifly, ousnius's managed nifly (cross-platform). The minimum is 1.1.0-a, not
          1.1.0, so a host that builds its own 1.1.0 prerelease (houseCARL's 1.1.0-housecarl.N fork)
          keeps it: with ">= 1.1.0" NuGet silently swapped in upstream 1.1.0 from the package cache
-         (docs/NIFLY_PORT_PLAN.md, Phase 0 results). That range is what NU1603 (1.1.0-0 itself
-         does not exist) and NU5104 (a prerelease lower bound on a stable package) warn about. -->
-    <PackageReference Include="Nifly" Version="1.1.0-0" NoWarn="NU1603;NU5104" />
+         (docs/NIFLY_PORT_PLAN.md, Phase 0 results). Not 1.1.0-0: nuget.org rejects a package whose
+         manifest has a prerelease label that does not start with a letter. "a" sorts below any
+         other letter label, so every 1.1.0 prerelease still satisfies it. That range is what
+         NU1603 (1.1.0-a itself does not exist) and NU5104 (a prerelease lower bound on a stable
+         package) warn about. -->
+    <PackageReference Include="Nifly" Version="1.1.0-a" NoWarn="NU1603;NU5104" />
     <PackageReference Include="Pfim" Version="0.11.4" />
   </ItemGroup>
 

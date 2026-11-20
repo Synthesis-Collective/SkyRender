@@ -15,7 +15,7 @@ Current state (read-only survey, 2026-10-31):
 
 When viewprobe moves to SkyRender 4.0:
 
-1. **Package resolution works as it is.** SkyRender 4.0 asks for `Nifly >= 1.1.0-0`, which
+1. **Package resolution works as it is.** SkyRender 4.0 asks for `Nifly >= 1.1.0-a`, which
    `1.1.0-housecarl.4` satisfies, so restore keeps the fork. There is one `NiflySharp 1.1.0.0`
    at run time, and it's the fork. Checked in a scratch copy of houseCARL's `nuget.config` and
    project shapes: SkyRender's plan, "Phase 0 results". Don't add an upstream `Nifly` reference;

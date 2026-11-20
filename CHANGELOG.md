@@ -100,10 +100,11 @@ Screenshots of the sample scenes and NPCs match 3.1.1 pixel for pixel.
 - `SkyRender.Wpf` is a third package; the release workflow builds and pushes it after the core.
   It depends on `SkyRender` and `OpenTK.GLWpfControl` 4.3.3.
 
-- `SkyRender` depends on `Nifly` with a minimum version of `1.1.0-0`, not `1.1.0`. A host that
+- `SkyRender` depends on `Nifly` with a minimum version of `1.1.0-a`, not `1.1.0`. A host that
   builds its own 1.1.0 prerelease of Nifly (such as houseCARL's `1.1.0-housecarl.N`) keeps it.
   With `>= 1.1.0`, NuGet silently replaced such a build with upstream 1.1.0 from its package
-  cache. The range raises NU5104 and NU1603 when packing and restoring, both suppressed in the
+  cache. (Not `1.1.0-0`: nuget.org rejects a prerelease label that does not start with a
+  letter.) The range raises NU5104 and NU1603 when packing and restoring, both suppressed in the
   project file.
 
 ## 3.1.1
