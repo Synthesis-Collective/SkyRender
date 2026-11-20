@@ -24,11 +24,11 @@ NPC of the game, with a Mutagen-backed `INpcMeshDataSource`.
 
 ```xml
 <!-- Scenes, NIFs, offscreen rendering (net8.0) -->
-<PackageReference Include="SkyRender" Version="3.0.0" />
+<PackageReference Include="SkyRender" Version="4.0.0" />
 <!-- A live view in a WPF window: paced frames, fly controls, frame-rate readout (net8.0-windows); includes SkyRender -->
 <PackageReference Include="SkyRender.Wpf" Version="4.0.0" />
 <!-- NPCs, portraits and the WPF character viewer (net8.0-windows10.0.19041.0); includes SkyRender -->
-<PackageReference Include="SkyRender.Character" Version="3.0.0" />
+<PackageReference Include="SkyRender.Character" Version="4.0.0" />
 ```
 
 To show the renderer inside a WPF window, use `SkyRender.Wpf`'s `SkyRenderView`
