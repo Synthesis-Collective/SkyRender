@@ -28,7 +28,9 @@ When viewprobe moves to SkyRender 4.0:
 3. **API renames**, if viewprobe uses any of these: `NifFileLoader.TryLoad` returns `LoadedNif`;
    `BuildFromFile`'s skeleton parameters take `LoadedNif`; for raw bytes behind a resolved
    (possibly in-memory) path, use `NifFileLoader.TryReadBytes`.
-4. **Fork behaviour:** the fork throws `InvalidDataException` on a corrupt count. SkyRender
+4. **Fork parity:** on the 41,740-file corpus, SkyRender 4.0 builds identical meshes on the fork
+   and on upstream Nifly (plan, "Fork parity").
+5. **Fork behaviour:** the fork throws `InvalidDataException` on a corrupt count. SkyRender
    catches every load exception and treats the file as unreadable (`TryLoad` returns null), so
    a malformed mesh renders as missing rather than crashing.
 

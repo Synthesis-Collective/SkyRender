@@ -1,9 +1,10 @@
 # Using SkyRender
 
 This guide walks through the common tasks, from "show one NIF" to NPC portraits. The runnable
-version of sections 2-3 is the sample app in [`samples/SkyRender.Demo`](../samples/SkyRender.Demo);
+version of sections 2-3 is the sample app in [`samples/SkyRender.Demo`](../samples/SkyRender.Demo)
+(it still hosts a `GLWpfControl` itself);
 [`samples/SkyRender.CellDemo`](../samples/SkyRender.CellDemo) puts sections 7-8 together into a
-whole cell read from the game's plugins, and
+whole cell read from the game's plugins, in the live view of section 3 (`SkyRenderView`), and
 [`samples/SkyRender.CharacterDemo`](../samples/SkyRender.CharacterDemo) does sections 5-6 for any
 NPC of the game, with a Mutagen-backed `INpcMeshDataSource`.
 
@@ -24,12 +25,15 @@ NPC of the game, with a Mutagen-backed `INpcMeshDataSource`.
 ```xml
 <!-- Scenes, NIFs, offscreen rendering (net8.0) -->
 <PackageReference Include="SkyRender" Version="3.0.0" />
+<!-- A live view in a WPF window: paced frames, fly controls, frame-rate readout (net8.0-windows); includes SkyRender -->
+<PackageReference Include="SkyRender.Wpf" Version="4.0.0" />
 <!-- NPCs, portraits and the WPF character viewer (net8.0-windows10.0.19041.0); includes SkyRender -->
 <PackageReference Include="SkyRender.Character" Version="3.0.0" />
 ```
 
-To show the renderer inside a WPF window you also need a GL host control, for example
-`OpenTK.GLWpfControl` (4.3.3 is what SkyRender is tested with).
+To show the renderer inside a WPF window, use `SkyRender.Wpf`'s `SkyRenderView`
+([section 3](#the-live-view-skyrenderview)). It hosts the GL output and paces the frames, so you
+do not need a GL host control of your own.
 
 ## 2. Connect SkyRender to the game files
 
@@ -109,23 +113,84 @@ The core building blocks, in the order a scene is built:
    its **Game daylight** box switches profiles (a renderer's profile is fixed when it is created,
    so it makes a new renderer and uploads the model again).
 
-With OpenTK.GLWpfControl, start the control with an OpenGL 3.3 context and do steps 2-3 in its
-`Render` callback:
+### The live view: `SkyRenderView`
+
+`SkyRender.Wpf`'s `SkyRenderView` is a WPF element that shows the scene. Put it in the window and
+do steps 2-3 in its events; all three run on the UI thread with the view's GL context current:
 
 ```csharp
-GlControl.Start(new GLWpfControlSettings { MajorVersion = 3, MinorVersion = 3, RenderContinuously = true });
-
-// GLWpfControl 4.x hooks its render loop up in IsVisibleChanged, which never fires for a control
-// that is already visible when Start() runs. Toggle visibility once, or no frame is drawn until
-// something else forces a redraw.
-GlControl.Visibility = Visibility.Collapsed;
-GlControl.Visibility = Visibility.Visible;
+var view = new SkyRenderView();                    // SkyRenderView.DefaultMode: a native child window
+GlRenderer? renderer = null;
+view.GlReady     += () => { renderer = new GlRenderer(); renderer.Initialize(ModuleResourceLocator.ShaderDirectory); /* step 2 */ };
+view.RenderFrame += frame => renderer!.Render(view.Camera, frame.Width, frame.Height);
+view.GlClosing   += () => renderer?.Dispose();     // free GL objects here, while the context still works
+HostPanel.Children.Add(view);
+// when the window closes: view.Dispose() in Window.Closing (not Closed)
 ```
 
-Forward mouse input to the camera with `camera.OnMouseDown(x, y, leftButton, middleButton)`,
-`OnMouseMove`, `OnMouseUp` and `OnMouseWheel(delta)` (left drag orbits, middle drag pans). Pass
-the viewport height as `OnMouseMove(x, y, GlControl.ActualHeight)`, in the same units as `x`/`y`,
-so a pan keeps the model under the cursor at any window size.
+What it does for you:
+
+- **Paces the frames.** One frame per display refresh, posted to the UI thread above input, so
+  mouse messages cannot hold frames back. By default it draws only while something changed
+  (`RenderMode = ViewRenderMode.OnDemand`): input, the camera (`OrbitCamera.ViewChanged`), a held
+  fly key, the view's size, or your own `view.Invalidate("why")`. A still view costs nothing.
+  Set `KeepDrawing` to a function that returns true while your scene still needs frames (an upload
+  running a slice per frame, an animation), or `RenderMode = ViewRenderMode.Continuous` to draw
+  at every refresh.
+- **Moves the camera** (`view.Camera`, `view.Controls`): left-drag orbits, right-drag looks around
+  from where the eye stands, middle-drag pans, the wheel zooms, and W A S D / Q E fly while held,
+  Shift faster. Flying moves **by the clock**, a distance for the time since the last frame, not a
+  step per key-repeat message, so it is as smooth as the frame rate. `Controls.FlySpeed` is in
+  units a second. `ControlsEnabled = false` leaves the camera to you; `view.Input` gives you every
+  mouse and key event either way (for picking, or keys of your own).
+- **Measures itself.** `ShowReadout = true` shows a one-line readout above the view: frames a
+  second, the median frame time, the mean of the slowest 1%, the worst, and the render call.
+  `StartFrameLog(path)` / `StopFrameLog()` write one CSV row per frame (`FrameStats.CsvHeader` names
+  the columns) and return the summary. `PlayMotion(ViewMotion.Look(...))` and
+  `ViewMotion.Fly(...)` drive the view through its real input path with no hand on the mouse, so
+  you can log a look-around or a fly and compare builds. If a view feels jittery, log it before
+  changing anything: [Troubleshooting](#the-view-is-slow-or-jittery) says how to read the result.
+
+**Two hosts.** `new SkyRenderView(ViewHostMode.NativeWindow)` (the default) draws into a native
+child window inside your WPF window and presents with `SwapBuffers`.
+`new SkyRenderView(ViewHostMode.WpfTexture)` draws into a texture shared with WPF
+(`OpenTK.GLWpfControl`, the `WGL_NV_DX_interop` driver extension) on WPF's own frame tick.
+
+| | `NativeWindow` (default) | `WpfTexture` |
+|---|---|---|
+| Frame timing | its own pacer: the desktop compositor while that keeps the display's rate, else a high-resolution clock | WPF's frame tick, which follows the desktop compositor |
+| WPF content over the view | not possible: a child window sits above everything WPF draws in its rectangle (the readout is a strip above the view for that reason) | yes: it is a WPF element like any other |
+| Needs | any OpenGL 3.3 driver | a driver with `WGL_NV_DX_interop` |
+| Input | the view's own window; `view.Input` and the built-in controls work the same | WPF events on the element, and `view.Input` |
+
+Choose `WpfTexture` when WPF elements must overlap the view (an overlay, a popup, a transform or
+opacity on the view itself). Otherwise keep the default: its frame rate does not depend on the
+compositor's (CHANGELOG 4.0.0 has the measurements).
+
+**On your own GL context.** If your scene already lives on a GL context of yours (built on a
+hidden window before any view exists), hand that context to the view instead of letting it make
+one:
+
+```csharp
+var view = new SkyRenderView(ViewGlContext.From(myHiddenWindow));         // an OpenTK NativeWindow or GameWindow
+// or, with only the handles: ViewGlContext.FromHandles(hiddenHwnd, hglrc)
+view.RenderFrame += frame => myRenderer.Render(view.Camera, frame.Width, frame.Height);
+```
+
+- The view is always the `NativeWindow` host. Its child window takes your hidden window's pixel
+  format, so multisampling is whatever that format has.
+- The view never disposes the context. When the view's window goes, it leaves your context
+  current on your hidden window, so your GL calls keep working.
+- `GlReady` and `GlClosing` are still raised with the context current. If your GL objects outlive
+  the view, leave them alone in `GlClosing`.
+- The context must be on the UI thread the view is on, and OpenTK's GL bindings must already be
+  loaded (creating any OpenTK window does that).
+- `WpfTexture` views always make their own context.
+
+Create the view on the application's main thread. To draw into the view outside a frame, call
+`view.MakeCurrent()` first. In either host, mouse positions in `view.Input` are in WPF units from
+the view's top-left corner; pass `view.ViewSize.Height` with them to `OrbitCamera.OnMouseMove` if
+you drive a camera yourself.
 
 **Framing.** Point `camera.Target` at the scene's centre and set `camera.Distance` so the
 bounding sphere fits the field of view: `radius / sin(FieldOfView / 2)` plus a margin. NIF models
@@ -185,6 +250,48 @@ byte[] png = await offscreen.RenderToPngAsync(new OffscreenRenderRequest { Width
 post-processing toggles (tone mapping, shadows, ambient occlusion, bloom, vignette, exposure),
 cancellation, timing output and lists that report missing meshes and textures.
 `RenderToBgra32Async` returns raw pixels instead of a PNG.
+
+### Top-down map tiles
+
+For a map, draw the scene from straight above with no perspective. Three pieces, each usable alone:
+
+```csharp
+// 1. The camera: a world rectangle and a height range, in Skyrim units (X east, Y north, Z up).
+//    The rectangle fills the image; north is up, east is right.
+var camera = new TopDownCamera(west: 20480, south: -12288, east: 28672, north: -4096,
+                               floor: -40000, ceiling: 60000);
+var (width, height) = camera.ImageSize(unitsPerPixel: 16);   // 512 x 512
+
+// 2. The light: the same for every tile, no weather, no time of day, no fog.
+renderer.ApplyEnvironment(SceneEnvironment.TopDownMap);
+renderer.EnableShadows = false;
+
+// 3. Nothing behind the scene: alpha 0 where no geometry is, so the tile lays over your own drawing.
+byte[] png = await offscreen.RenderToPngAsync(new OffscreenRenderRequest
+{
+    Width = width, Height = height,
+    TransparentBackground = true,
+    Scene = camera,            // whatever your builder reads; return the camera from IOffscreenScene.Camera
+});
+```
+
+- **Joining tiles.** Rectangles that share an edge, drawn at the same scale, join without a seam.
+  Keep each side a whole multiple of the scale (a 4096-unit cell at 16 units a pixel is 256 pixels).
+- **Height range.** Only what lies between `floor` and `ceiling` is drawn. Lower the ceiling to
+  leave out what is above it; geometry it cuts through is left open.
+- **Many tiles from one scene.** Loading is the cost, not drawing. Keep the `GlRenderer`, its meshes
+  and its textures in your builder between renders, return an `IOffscreenScene` whose `Dispose`
+  frees nothing, and give each request only a new camera. `samples/SkyRender.CellDemo/TileRun.cs`
+  does this. The renderer draws every mesh of the scene for every tile (it does not cull by the
+  camera's rectangle), so load the cells near the view, not a whole worldspace.
+- **Load the neighbours.** An object belongs to the cell its origin is in. A building that stands
+  over a cell border, or over a hole in the next cell's terrain, is missing from a tile whose scene
+  holds only the cells the rectangle touches.
+- **Alpha.** The PNG is RGBA and the BGRA32 buffer keeps its alpha; both are straight alpha, not
+  premultiplied. Leave `EnableToneMapping` off with a transparent background.
+- **Cost.** Four cells of Whiterun (897 objects, 268 textures) at 512 x 512: about 2.1 s for the
+  first tile (reading, parsing and uploading the scene), then about 6 ms a tile as BGRA32 or 29 ms
+  as PNG, on an RTX 5090 desktop. PNG compression is most of a warm tile.
 
 ## 5. Render an NPC portrait
 
@@ -474,13 +581,13 @@ host sets wins.
 ## 10. Threading and requirements
 
 - Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
-- `SkyRender` targets `net8.0`; `SkyRender.Character` targets `net8.0-windows10.0.19041.0`
-  (WPF). Newer .NET versions consume both. A project that uses `SkyRender.Character` needs a
+- `SkyRender` targets `net8.0`; `SkyRender.Wpf` targets `net8.0-windows` (WPF);
+  `SkyRender.Character` targets `net8.0-windows10.0.19041.0` (WPF). Newer .NET versions consume both. A project that uses `SkyRender.Character` needs a
   Windows platform version of at least 10.0.19041 in its target framework (for example
   `net8.0-windows10.0.19041.0`), because its ReactiveUI.WPF dependency ships its modern .NET
   build only for that platform; see [Troubleshooting](#11-troubleshooting).
-- All GL work happens on the thread that owns the context: your GL control's render callback, or
-  the offscreen renderer's own thread. Parsing (`NifMeshBuilder`) and decoding (`AssetCache`) are
+- All GL work happens on the thread that owns the context: the view's `GlReady`, `RenderFrame`
+  and `GlClosing` events (the UI thread), or the offscreen renderer's own thread. Parsing (`NifMeshBuilder`) and decoding (`AssetCache`) are
   GL-free and thread-safe.
 - Create the offscreen renderer on the application's main thread (its window library installs a
   hook on the first thread that touches it), then call it from anywhere.
@@ -490,6 +597,35 @@ See [RENDERING_PIPELINE.md](RENDERING_PIPELINE.md) for how the renderer works in
 [CHARACTER_PIPELINE.md](CHARACTER_PIPELINE.md) for what the character tier adds.
 
 ## 11. Troubleshooting
+
+### The view is slow or jittery
+
+Measure before changing anything; the cause is often not the renderer.
+
+1. Turn the readout on (`view.ShowReadout = true`) and read its `render` figure. If the render
+   call is a few milliseconds and the frame time is not, the scene is not the problem: the frames
+   are being scheduled late.
+2. Log a motion: `view.StartFrameLog("frames.csv")`, then
+   `view.PlayMotion(ViewMotion.Look(8, 180), _ => Console.WriteLine(view.StopFrameLog()?.Words()))`
+   (and the same with `ViewMotion.Fly(8)`). Look at the count of intervals over 25 ms, not the
+   mean. In the CSV, `queued_ms` is how long a posted frame waited for the UI thread (your own
+   work on that thread shows up here), `reason_age_ms` is how long the change waited for its frame,
+   and `render_ms` / `gpu_ms` are the scene's own cost.
+3. Check the desktop itself: `CompositorTiming.MeasureCompositionMs()` (off the UI thread)
+   returns the time between desktop compositions. It should be the display's refresh period (16.7 ms
+   at 60 Hz). When it is not (46 ms and 140 ms have been measured on a 60 Hz display, on a
+   desktop whose compositor had gone slow), everything paced by the compositor is slow with it:
+   WPF's frame tick, and so `ViewHostMode.WpfTexture` and any `GLWpfControl`, and a loop that
+   waits on `DwmFlush`. The default host notices and keeps its own clock; its readout then ends
+   with "paced by the view's own clock", and the log's `host` column reads `native/clock`.
+4. `SKYRENDER_VIEW_PACER=compositor` or `=clock` (an environment variable) keeps the default host
+   to one timing source, to tell the two apart.
+
+If you host the renderer yourself instead of using `SkyRenderView`, the two mistakes that were
+measured in a real application are: queuing frames on the dispatcher below input priority
+(`DispatcherPriority.Background`: frames waited 50 to 300 ms while the mouse moved; use
+`DispatcherPriority.Render`), and moving the camera once per key-repeat message (about 30 steps a
+second after a half-second delay, whatever the frame rate; move by elapsed time each frame).
 
 ### NU1202 when installing SkyRender.Character
 

@@ -13,8 +13,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\SkyRender\SkyRender.csproj" />
-    <!-- Hosts SkyRender's GL output in WPF. Same version SkyRender.Character uses. -->
-    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
+    <!-- The live view: SkyRenderView hosts the GL output in the window, paces the frames and
+         brings the readout, the frame log and the fly controls. -->
+    <ProjectReference Include="..\..\src\SkyRender.Wpf\SkyRender.Wpf.csproj" />
     <!-- The load order, the plugins' records and the BSA archives. The version SkyRender.Demo uses;
          Mutagen 0.54 needs net9+, hence the net10 target. -->
     <PackageReference Include="Mutagen.Bethesda" Version="0.54.2" />

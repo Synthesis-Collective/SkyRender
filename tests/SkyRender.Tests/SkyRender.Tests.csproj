@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Tests of the two SkyRender libraries alone (no host). Windows TFM because they cover the
-       WPF character tier too. -->
+  <!-- Tests of the SkyRender libraries alone (no host). Windows TFM because they cover the WPF
+       character tier and the WPF view host too. -->
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\SkyRender\SkyRender.csproj" />
     <ProjectReference Include="..\..\src\SkyRender.Character\SkyRender.Character.csproj" />
+    <ProjectReference Include="..\..\src\SkyRender.Wpf\SkyRender.Wpf.csproj" />
   </ItemGroup>
 
 </Project>

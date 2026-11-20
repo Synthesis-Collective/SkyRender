@@ -36,6 +36,18 @@ public class OffscreenRenderRequest
     /// the scene is rendered. Defaults to a neutral mid-gray.</summary>
     public (byte R, byte G, byte B) BackgroundRgb { get; init; } = (105, 105, 105);
 
+    /// <summary>
+    /// When true, nothing is drawn behind the scene: pixels no geometry covers come back with
+    /// alpha 0, covered pixels with alpha 255, and antialiased edges and blended surfaces over
+    /// nothing with the alpha in between. <see cref="BackgroundRgb"/> is not used. The PNG is
+    /// RGBA, and both it and the BGRA32 buffer carry straight (not premultiplied) alpha. For
+    /// overlays a host lays over its own drawing, such as map tiles
+    /// (<see cref="SkyRender.TopDownCamera"/>). Default false: an opaque image, as before.
+    /// <para>Leave <see cref="EnableToneMapping"/> off with it: the sRGB encode that goes with the
+    /// tone map makes partly covered pixels too dark.</para>
+    /// </summary>
+    public bool TransparentBackground { get; init; }
+
     /// <summary>Optional cancellation token. The renderer aborts at the next
     /// await point if cancellation is requested.</summary>
     public CancellationToken Cancellation { get; init; }

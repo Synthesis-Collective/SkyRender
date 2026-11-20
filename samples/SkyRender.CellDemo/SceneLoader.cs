@@ -56,11 +56,11 @@ internal sealed class SceneLoader
     public const float LodReach = 409600f;
 
     public PreparedScene Prepare(CellEntry cell, WorldEntry? world, bool ring, bool lod, int generation,
-        Action<string> progress, CancellationToken ct)
+        Action<string> progress, CancellationToken ct, IEnumerable<(int X, int Y)>? alsoCells = null)
     {
         progress("Reading the cell's records...");
         var clock = Stopwatch.StartNew();
-        var data = _walk.Build(cell, world, ring, ct);
+        var data = _walk.Build(cell, world, ring, ct, alsoCells);
         var prepared = new PreparedScene { Data = data, Generation = generation, Clock = clock };
         prepared.Mark("records");
         _log.LogMessage($"{data.Title}: {data.Models.Count} placed model(s), {data.Lights.Count} light(s), " +

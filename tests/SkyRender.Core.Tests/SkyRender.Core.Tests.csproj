@@ -34,6 +34,8 @@
     <Compile Include="..\SkyRender.Tests\ProjectedMaterialTests.cs" Link="Shared\%(Filename)%(Extension)" />
     <Compile Include="..\SkyRender.Tests\ReferencePlacementTests.cs" Link="Shared\%(Filename)%(Extension)" />
     <Compile Include="..\SkyRender.Tests\SkyGradientTests.cs" Link="Shared\%(Filename)%(Extension)" />
+    <Compile Include="..\SkyRender.Tests\ViewCameraControlsTests.cs" Link="Shared\%(Filename)%(Extension)" />
+    <Compile Include="..\SkyRender.Tests\ViewFrameStatsTests.cs" Link="Shared\%(Filename)%(Extension)" />
     <Compile Include="..\SkyRender.Tests\WorldMeshBuilderTests.cs" Link="Shared\%(Filename)%(Extension)" />
   </ItemGroup>
 

@@ -39,7 +39,9 @@ foreach (var shape in shapes)
 renderer.Render(camera, width, height);   // every frame
 ```
 
-Offscreen rendering, NPC portraits and the interactive character viewer are covered in the
+In a WPF window, `SkyRender.Wpf`'s `SkyRenderView` hosts the GL output: it paces the frames, moves
+the camera from the mouse and the fly keys, and carries a frame-rate readout and a per-frame log.
+That, offscreen rendering, NPC portraits and the interactive character viewer are covered in the
 [usage guide](https://github.com/Synthesis-Collective/SkyRender/blob/main/docs/USAGE.md).
 
 ## Demo
@@ -94,7 +96,7 @@ adaptation; and clouds are not drawn. RENDERING_PIPELINE.md records each compari
 ## Platform
 
 - Windows with an OpenGL 3.3 capable GPU (the offscreen renderer requests a 4.0 core context).
-- The core is plain `net8.0`; the character tier needs WPF and a Windows platform version of at
+- The core is plain `net8.0`; the view host (`SkyRender.Wpf`) is `net8.0-windows`; the character tier needs WPF and a Windows platform version of at
   least 10.0.19041 in the host's target framework (for example `net8.0-windows10.0.19041.0`; a
   plain `-windows` target gets NU1202); USAGE.md's Troubleshooting section explains this.
 - NIF parsing has no native dependency (the managed Nifly package, since 4.0).

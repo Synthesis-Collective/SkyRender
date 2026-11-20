@@ -27,5 +27,14 @@ public partial class App : Application
     {
         StartupOptions.Current = StartupOptions.Parse(e.Args);
         base.OnStartup(e);
+        if (StartupOptions.Current.Tile != null)
+        {
+            // A map tile needs no window: the offscreen renderer has its own GL context. It is
+            // created here, on the main thread, as OffscreenRendererFactory asks.
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            Dispatcher.BeginInvoke(async () => Shutdown(await TileRun.RunAsync(StartupOptions.Current)));
+            return;
+        }
+        new MainWindow().Show();
     }
 }

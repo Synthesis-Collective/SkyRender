@@ -33,6 +33,56 @@ Screenshots of the sample scenes and NPCs match 3.1.1 pixel for pixel.
   archive file served from memory, as the caller's own array. For hosts that parse NIFs with
   their own library.
 
+- Top-down map tiles: a straight-down render of a scene over a world rectangle, with no
+  perspective, for a host that draws a map (USAGE.md, "Top-down map tiles").
+  - `TopDownCamera`: an `OrbitCamera` built from a rectangle and a height range in Skyrim world
+    units. The rectangle fills the image, north up and east right, so tiles of neighbouring
+    rectangles join. `TopDownCamera.ImageSize` gives the pixel size for a scale.
+    `OrbitCamera.GetViewMatrix`, `GetProjectionMatrix` and `GetEyePosition` are now virtual.
+  - `SceneEnvironment.TopDownMap`: a fixed light from the north-west with no fog and no image
+    space, the same for every tile.
+  - `OffscreenRenderRequest.TransparentBackground` (and `GlRenderer.TransparentBackground`): alpha
+    0 where nothing is drawn. The PNG is then RGBA; PNG and BGRA32 carry straight alpha. Off by
+    default, and an opaque render is unchanged.
+  - CellDemo shows frames a second and frame time over the 3D view, and takes `--orbit SECONDS`
+    (a steady camera turn with no hand on the mouse) and `--fps-log FILE.csv` (one row per frame).
+  - CellDemo `--tile FILE.png`: renders a tile of `--world` / `--grid` without opening the window
+    and writes its cold and warm times beside it.
+
+- Live view host: a new package, `SkyRender.Wpf` (`net8.0-windows`), whose `SkyRenderView` shows a
+  scene in a WPF window and paces its frames, so a host no longer writes its own frame loop
+  (USAGE.md, "The live view: `SkyRenderView`").
+  - Two hosts, chosen when the view is created. `ViewHostMode.NativeWindow` (the default) is a
+    native child window presented with `SwapBuffers`. `ViewHostMode.WpfTexture` is
+    `OpenTK.GLWpfControl`, a texture shared with WPF, for views that WPF content must overlap.
+  - The native host posts one frame per display refresh to the UI thread above input priority.
+    It waits for the desktop compositor while that keeps the display's rate and keeps its own
+    high-resolution clock when it does not.
+  - `ViewRenderMode.OnDemand` (the default) draws only while something changed;
+    `SkyRenderView.Invalidate`, `KeepDrawing` and `ViewRenderMode.Continuous` cover the rest.
+  - `new SkyRenderView(ViewGlContext)` draws with a GL context the host already has, so a scene
+    built on the host's hidden window before the view existed shows in it.
+    `ViewGlContext.From(NativeWindow)` takes an OpenTK window, `ViewGlContext.FromHandles(hwnd,
+    hglrc)` a bare WGL context. The view takes the window's pixel format, never disposes the
+    context, and leaves it current on the hidden window when the view's window goes. Native host
+    only.
+  - In the core package, namespace `SkyRender.Viewing`: `ViewCameraControls` (orbit, look, pan,
+    zoom, and fly keys that move by elapsed time each frame, not per key-repeat message),
+    `FrameStats` (the readout and a per-frame CSV log, summed up as median, 1% low, worst and
+    counts over 25 and 50 ms), `GpuTimer` and `ViewMotion` (a scripted look or fly, played through
+    the view's real input path by `SkyRenderView.PlayMotion`).
+  - `CompositorTiming` reads the desktop compositor's pace, to tell a late view from a slow desktop.
+  - Measured on one machine (60 Hz display), 8 s each of orbit, mouse-look and held-key fly in a
+    sparse and a busy cell, three runs each. With the desktop compositor composing every
+    16.7 ms the two hosts were alike: 0.5% of the native host's intervals were over 25 ms and
+    0.6% of the WPF texture host's. With the compositor slow (a composition every 46.6 ms) the
+    native host held a 16.6 ms median with 1 interval over 25 ms in 8,664 frames, and the WPF
+    texture host ran at 96 to 140 ms. That is why the native host is the default
+    (`artifacts/fps/host-bench/RESULT.md`).
+  - CellDemo runs on `SkyRenderView`. `--host native|wpf` picks the host, `--continuous` the
+    render mode, and `--bench DIR` logs still, orbit, look and fly with no hand on the mouse. Its
+    `--fps-log` columns are now `FrameStats.CsvHeader`.
+
 ### Removed
 
 - The native-vector fast path for in-memory NIFs (`NifFileLoader`'s one-copy fill of
@@ -40,6 +90,9 @@ Screenshots of the sample scenes and NPCs match 3.1.1 pixel for pixel.
 - Warning MSB3246 in referencing projects: it came from niflysharp's native `niflycpp.dll`.
 
 ### Packaging
+
+- `SkyRender.Wpf` is a third package; the release workflow builds and pushes it after the core.
+  It depends on `SkyRender` and `OpenTK.GLWpfControl` 4.3.3.
 
 - `SkyRender` depends on `Nifly` with a minimum version of `1.1.0-0`, not `1.1.0`. A host that
   builds its own 1.1.0 prerelease of Nifly (such as houseCARL's `1.1.0-housecarl.N`) keeps it.

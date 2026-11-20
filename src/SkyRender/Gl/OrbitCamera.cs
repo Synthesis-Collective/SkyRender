@@ -124,7 +124,7 @@ public class OrbitCamera
     private bool _isOrbiting;
     private bool _isPanning;
 
-    public Matrix4 GetViewMatrix()
+    public virtual Matrix4 GetViewMatrix()
     {
         float azRad = MathHelper.DegreesToRadians(Azimuth);
         float elRad = MathHelper.DegreesToRadians(Elevation);
@@ -145,7 +145,7 @@ public class OrbitCamera
         return Matrix4.LookAt(eye, Target, Vector3.UnitY);
     }
 
-    public Matrix4 GetProjectionMatrix(float aspectRatio)
+    public virtual Matrix4 GetProjectionMatrix(float aspectRatio)
     {
         return Matrix4.CreatePerspectiveFieldOfView(
             MathHelper.DegreesToRadians(FieldOfView),
@@ -155,7 +155,7 @@ public class OrbitCamera
     }
 
     /// <summary>Gets the camera position in world space.</summary>
-    public Vector3 GetEyePosition()
+    public virtual Vector3 GetEyePosition()
     {
         float azRad = MathHelper.DegreesToRadians(Azimuth);
         float elRad = MathHelper.DegreesToRadians(Elevation);

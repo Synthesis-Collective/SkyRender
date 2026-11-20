@@ -1,7 +1,6 @@
 <Window x:Class="SkyRender.CellDemo.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:glWpf="clr-namespace:OpenTK.Wpf;assembly=GLWpfControl"
         Title="SkyRender Cell Demo" Width="1500" Height="950">
     <DockPanel Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}">
         <TextBlock x:Name="StatusText" DockPanel.Dock="Bottom" Padding="8,4" Background="#F0F0F0" TextTrimming="CharacterEllipsis"
@@ -82,11 +81,9 @@
                     <RowDefinition Height="*" MinHeight="60" />
                 </Grid.RowDefinitions>
 
-                <Grid x:Name="GlHost" Grid.Row="0" Background="#404040">
-                    <glWpf:GLWpfControl x:Name="GlControl" Render="GlControl_Render" Focusable="True"
-                                        MouseDown="GlControl_MouseDown" MouseMove="GlControl_MouseMove"
-                                        MouseUp="GlControl_MouseUp" MouseWheel="GlControl_MouseWheel" KeyDown="GlControl_KeyDown" />
-                </Grid>
+                <!-- The 3D view (a SkyRender.Wpf.SkyRenderView, with its frame-rate readout) is added
+                     in code, so the host can be chosen on the command line (host native / wpf). -->
+                <Grid x:Name="GlHost" Grid.Row="0" Background="#404040" />
 
                 <GridSplitter Grid.Row="1" Height="5" HorizontalAlignment="Stretch" Background="#D0D0D0"
                               ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" />

@@ -95,6 +95,26 @@ public sealed record SceneEnvironment(
         return (azimuth, elevation);
     }
 
+    /// <summary>
+    /// Light for a map drawn from above (<see cref="TopDownCamera"/>): the same for every tile, with
+    /// no time of day and no weather. One white light from the north-west at 55 degrees (the
+    /// cartographic convention: relief lit from the top left reads as raised) over an even grey
+    /// ambient, no fog and no image-space finish, so colours are the textures' own. Water reflects a
+    /// pale sky. Shadows are a renderer setting: leave <c>GlRenderer.EnableShadows</c> off so
+    /// neighbouring tiles match. The background is not used with a transparent background.
+    /// </summary>
+    public static SceneEnvironment TopDownMap { get; } = new(
+        Background: new Vector3(0.41f, 0.41f, 0.41f),
+        SkyColor: Rgb(150, 180, 205),
+        SkyGradient: null,
+        SunAzimuthDegrees: 225f,
+        SunElevationDegrees: 55f,
+        SunColor: Vector3.One,
+        SunIntensity: 0.9f,
+        AmbientColor: new Vector3(0.6f, 0.6f, 0.6f),
+        Fog: null,
+        ImageSpace: null);
+
     private static SceneEnvironment BuildVanillaClearDay()
     {
         var gradient = SkyGradient.FromSkyDome(ClearHorizon, ClearSkyLower, ClearSkyUpper, ClearFogFar, ClearFogMax, ClearSkyScale);

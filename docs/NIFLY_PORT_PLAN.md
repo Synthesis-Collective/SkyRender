@@ -545,4 +545,33 @@ so 4.0 marks its cached mugshots stale and they get re-rendered.
   of a skinned shape leaves the geometry to the skin partition, so an unskinned shape authored
   with it saves with no vertices unless `IsSkinned = false`. (NiflySharp 1.1.0,
   `Blocks/BSTriShape.cs`, `BeforeSync`.)
-- Not run on Linux yet: the job needs a push.
+- On Ubuntu (run 41281558660, commit aba8735): 97 of 97 pass, so Nifly parsing and mesh
+  building load no native library.
+
+### Fork parity (houseCARL's `Nifly 1.1.0-housecarl.4`, 2026-11-01)
+
+- NifSnapshot built from a scratch copy of `aba8735` with SkyRender pinned to
+  `[1.1.0-housecarl.4]`. NuGet read houseCARL's `packages/local` feed and used an isolated
+  package folder, so nothing in houseCARL or the user package cache was written.
+- The loaded `NiflySharp.dll` was checked byte for byte against the fork package's
+  `lib/net10.0` copy (SHA-256 `a8028b03…`). Both builds report themselves as
+  `NiflySharp 1.1.0.0`, so the version alone can't tell them apart.
+- Run only after 10 consecutive idle minutes of houseCARL (its shakedown was capturing back to
+  back), under the capture watcher. One try, 52 s.
+- **Against the upstream-Nifly port run (`port-4.0-run2`): 41,740 of 41,740 identical**, with
+  no mesh differences and no status changes. The fork's corruption bounds checks reject nothing
+  in the corpus, and even the NaN UV bit patterns match. houseCARL's viewprobe will see the
+  same meshes as the verified upstream build.
+
+### Concurrency (2026-11-20)
+
+- NifSnapshot built from the working tree at `aba8735` plus the uncommitted 4.0 work, captured
+  with `--threads 1` and diffed against `port-4.0-run2` (default threads, half the cores).
+  Run under the capture watcher after 10 consecutive idle minutes of houseCARL; one try, 3 min 16 s.
+- **41,740 of 41,740 shared files identical**, with no mesh differences, no status changes and no
+  exceptions (41,933 built, 690 empty). Parsing in parallel changes nothing.
+- The lab has grown since October: 883 files exist only in the new run, all from four mod
+  folders added since (Ultimate Markarth Expanded 683, Lux Orbis 116, SR Exterior Cities
+  Series 2.0 60, Ultimate Markarth 24). They have no earlier run to diff against.
+- `SceneLoadRaceTests` pass in the Windows suite.
+- Output: `S:\Dev\_skyrender-nifly-port\concurrency\` (`single-thread.jsonl`, `diff.txt`, `run.sh`).

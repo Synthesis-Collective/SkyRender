@@ -6,8 +6,9 @@ using System.IO.Compression;
 namespace SkyRender.Offscreen;
 
 /// <summary>
-/// Minimal PNG encoder for the offscreen renderer's readback: 8-bit truecolour (RGB, alpha dropped,
-/// since readback alpha is stamped opaque), one Paeth filter per scanline, zlib-compressed IDAT.
+/// Minimal PNG encoder for the offscreen renderer's readback: 8-bit truecolour, as RGB (alpha
+/// dropped, since an opaque render's alpha is stamped 255) or as RGBA (a transparent-background
+/// render), one Paeth filter per scanline, zlib-compressed IDAT.
 /// A single fixed filter is within a few percent of adaptive filtering's size on smooth rendered
 /// images for a fraction of the CPU. Stateless and thread-safe.
 /// </summary>
@@ -17,32 +18,39 @@ internal static class PngWriter
     private static readonly uint[] CrcTable = BuildCrcTable();
 
     /// <summary>Encodes top-left-origin RGBA8 pixels as an RGB PNG.</summary>
-    public static byte[] EncodeRgb(byte[] rgba, int width, int height)
+    public static byte[] EncodeRgb(byte[] rgba, int width, int height) => Encode(rgba, width, height, 3);
+
+    /// <summary>Encodes top-left-origin RGBA8 pixels (straight alpha) as an RGBA PNG.</summary>
+    public static byte[] EncodeRgba(byte[] rgba, int width, int height) => Encode(rgba, width, height, 4);
+
+    private static byte[] Encode(byte[] rgba, int width, int height, int channels)
     {
         if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         if (rgba.Length < width * height * 4) throw new ArgumentException("Pixel buffer is too small.", nameof(rgba));
 
-        int stride = width * 3;
+        int stride = width * channels;
         var filtered = new byte[(stride + 1) * height];
         var prev = new byte[stride];
         var cur = new byte[stride];
         for (int y = 0; y < height; y++)
         {
             int src = y * width * 4;
-            for (int x = 0; x < width; x++)
-            {
-                cur[x * 3] = rgba[src + x * 4];
-                cur[x * 3 + 1] = rgba[src + x * 4 + 1];
-                cur[x * 3 + 2] = rgba[src + x * 4 + 2];
-            }
+            if (channels == 4) Buffer.BlockCopy(rgba, src, cur, 0, stride);
+            else
+                for (int x = 0; x < width; x++)
+                {
+                    cur[x * 3] = rgba[src + x * 4];
+                    cur[x * 3 + 1] = rgba[src + x * 4 + 1];
+                    cur[x * 3 + 2] = rgba[src + x * 4 + 2];
+                }
 
             int dst = y * (stride + 1);
             filtered[dst] = 4; // filter type: Paeth
             for (int i = 0; i < stride; i++)
             {
-                int a = i >= 3 ? cur[i - 3] : 0;
+                int a = i >= channels ? cur[i - channels] : 0;
                 int b = prev[i];
-                int c = i >= 3 ? prev[i - 3] : 0;
+                int c = i >= channels ? prev[i - channels] : 0;
                 filtered[dst + 1 + i] = (byte)(cur[i] - Paeth(a, b, c));
             }
             (prev, cur) = (cur, prev);
@@ -60,7 +68,7 @@ internal static class PngWriter
         BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(0), width);
         BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(4), height);
         header[8] = 8;  // bit depth
-        header[9] = 2;  // colour type: truecolour
+        header[9] = (byte)(channels == 4 ? 6 : 2);  // colour type: truecolour, with alpha or without
         header[10] = 0; // compression: deflate
         header[11] = 0; // filter method: adaptive (per-scanline filter byte)
         header[12] = 0; // interlace: none

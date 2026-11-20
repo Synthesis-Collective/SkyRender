@@ -858,6 +858,18 @@ public class GlRenderer : IDisposable
     /// <summary>Background clear color (RGB 0-1).</summary>
     public Vector3 ClearColor { get; set; } = new Vector3(0.41f, 0.41f, 0.41f); // DimGray
 
+    /// <summary>
+    /// Draw over a transparent background instead of <see cref="ClearColor"/>, leaving coverage in
+    /// the framebuffer's alpha: the frame is cleared to (0, 0, 0, 0), shapes drawn without blending
+    /// write alpha 1 whatever their texture's alpha, and blended shapes add their alpha to what is
+    /// under them. The colour that results is premultiplied by that alpha (an antialiased edge and a
+    /// blended surface over nothing are both mixed with black). Off by default. The offscreen
+    /// renderer sets it from <c>OffscreenRenderRequest.TransparentBackground</c> and returns straight
+    /// alpha; a host drawing into its own framebuffer needs one with an alpha channel.
+    /// <see cref="ClearColor"/> keeps its other meaning, the sky colour water reflects.
+    /// </summary>
+    public bool TransparentBackground { get; set; }
+
     /// <summary>Colour water surfaces reflect (times their water type's reflection colour). Null
     /// (the default) uses <see cref="ClearColor"/>, the scene's sky.</summary>
     public Vector3? SkyColor { get; set; }
@@ -1367,7 +1379,8 @@ public class GlRenderer : IDisposable
         GL.Viewport(0, 0, viewportWidth, viewportHeight);
         // The image space finishes the whole frame in the engine, the sky included.
         var clear = ImageSpace?.Apply(ClearColor) ?? ClearColor;
-        GL.ClearColor(clear.X, clear.Y, clear.Z, 1f);
+        if (TransparentBackground) GL.ClearColor(0f, 0f, 0f, 0f);
+        else GL.ClearColor(clear.X, clear.Y, clear.Z, 1f);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
         _shader.Use();
@@ -1515,6 +1528,8 @@ public class GlRenderer : IDisposable
         BeginClipPass(_shader);
 
         // Pass 0: Opaque meshes (no alpha test or blend)
+        // Over a transparent background, passes 0 and 1 write alpha 1 (coverage).
+        _shader.SetBool("u_opaqueAlpha", TransparentBackground);
         GL.Disable(EnableCap.Blend);
         GL.DepthMask(true);
         foreach (var mesh in _meshes)
@@ -1560,6 +1575,7 @@ public class GlRenderer : IDisposable
         // shapes (the prior behavior) made solid blended beards render
         // see-through.
         GL.Enable(EnableCap.Blend);
+        _shader.SetBool("u_opaqueAlpha", false);
 
         // Collect the blended NON-DECAL subset and sort it back-to-front by
         // camera distance, so overlapping transparent surfaces composite in the
@@ -1617,8 +1633,16 @@ public class GlRenderer : IDisposable
         {
             if (mesh.SrcBlendIndex != curSrc || mesh.DstBlendIndex != curDst)
             {
-                GL.BlendFunc(MapBethesdaBlendFactor(mesh.SrcBlendIndex),
-                             MapBethesdaBlendFactor(mesh.DstBlendIndex));
+                // Over a transparent background the alpha channel accumulates coverage
+                // (a + dst * (1 - a)) whatever the colour factors are.
+                if (TransparentBackground)
+                    GL.BlendFuncSeparate(
+                        (BlendingFactorSrc)MapBethesdaBlendFactor(mesh.SrcBlendIndex),
+                        (BlendingFactorDest)MapBethesdaBlendFactor(mesh.DstBlendIndex),
+                        BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha);
+                else
+                    GL.BlendFunc(MapBethesdaBlendFactor(mesh.SrcBlendIndex),
+                                 MapBethesdaBlendFactor(mesh.DstBlendIndex));
                 curSrc = mesh.SrcBlendIndex;
                 curDst = mesh.DstBlendIndex;
             }

@@ -527,6 +527,9 @@ uniform mat4 u_view;
 // calculation (reflect(-(cameraPos - worldPos), worldNormal)). Pushed once
 // per frame from OrbitCamera.GetEyePosition() in GlRenderer.
 uniform vec3 u_cameraPos;
+// Transparent-background renders (GlRenderer.TransparentBackground): shapes drawn without
+// blending write alpha 1, so the framebuffer's alpha is coverage and not the texture's alpha.
+uniform bool u_opaqueAlpha;
 
 // Photoshop-style overlay blend (matches NifSkope / Bethesda engine)
 float overlayBlend(float b, float l)
@@ -814,6 +817,7 @@ void main()
     // Effect shaders take their own path end to end (see shadeEffect).
     if (u_isEffect) {
         FragColor = shadeEffect();
+        if (u_opaqueAlpha) FragColor.a = 1.0;
         return;
     }
 
@@ -1665,5 +1669,5 @@ void main()
     // with additive blend (SRC_ALPHA, ONE), which produces the engine-
     // correct "black cornea adds nothing, bright catchlight adds brightness"
     // behavior natively. No special-case shader logic needed.
-    FragColor = vec4(finalColor, baseColor.a);
+    FragColor = vec4(finalColor, u_opaqueAlpha ? 1.0 : baseColor.a);
 }

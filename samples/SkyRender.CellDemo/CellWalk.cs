@@ -66,7 +66,10 @@ internal sealed class CellWalk
     private sealed record RefCopy(FormKey Key, FormKey Base, Vector3 Position, Vector3 Rotation, float Scale,
         bool InitiallyDisabled, FormKey? EnableParent, bool OppositeOfParent, float FadeOffset, float RadiusOffset);
 
-    public SceneData Build(CellEntry target, WorldEntry? world, bool ring, CancellationToken ct)
+    /// <param name="alsoCells">Exteriors: further grid squares of the worldspace to draw with the
+    /// target (a map tile's rectangle), beside the ring.</param>
+    public SceneData Build(CellEntry target, WorldEntry? world, bool ring, CancellationToken ct,
+        IEnumerable<(int X, int Y)>? alsoCells = null)
     {
         var copies = _game.CellCopies(target.Key);
         if (copies.Count == 0) throw new InvalidOperationException("The cell is not in the load order: " + target.Display);
@@ -79,6 +82,10 @@ internal sealed class CellWalk
                 for (int dx = -1; dx <= 1; dx++)
                     if ((dx != 0 || dy != 0) && world.ByGrid.TryGetValue((tg.X + dx, tg.Y + dy), out var n))
                         cells.Add(n);
+        if (!target.IsInterior && world is not null && alsoCells is not null)
+            foreach (var g in alsoCells)
+                if (world.ByGrid.TryGetValue(g, out var extra) && !cells.Contains(extra))
+                    cells.Add(extra);
 
         var scene = new SceneData
         {

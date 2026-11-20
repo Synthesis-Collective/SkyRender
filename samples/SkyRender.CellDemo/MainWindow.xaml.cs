@@ -13,7 +13,8 @@ using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
-using OpenTK.Wpf;
+using SkyRender.Viewing;
+using SkyRender.Wpf;
 using SkyRender.World;
 
 namespace SkyRender.CellDemo;
@@ -46,22 +47,29 @@ public partial class MainWindow : Window
     private GlScene? _scene;
     private PreparedScene? _pending;                 // handed from the loader to the GL thread
     private readonly OrbitCamera _camera = new();
+    /// <summary>The 3D view: SkyRender's own host, which paces the frames, moves the camera from the
+    /// mouse and the fly keys, and carries the readout and the frame log.</summary>
+    private readonly SkyRenderView _view;
     private string? _lastRenderError;
     private readonly Stopwatch _frameClock = Stopwatch.StartNew();
-    private double _lastFrameSeconds;
     private CellEntry? _current;
     private bool _suppressSelection;
 
     // Scripted runs (StartupOptions): the queue of cells to open and screenshots to take.
     private readonly Queue<string> _cycle = new();
     private int _settleFrames = -1;
+
+    private double _orbitSeconds;
+    private double _orbitStartSeconds = -1;
+    private float _orbitStartAzimuth;
+    private bool _orbitDone;
     private int _shotIndex;
 
     public MainWindow()
     {
         InitializeComponent();
         // A scripted run opens without taking the focus from whatever the user is doing.
-        if (_options.Automated) ShowActivated = false;
+        if (_options.Automated && _options.Bench == null) ShowActivated = false;
         _log.Attach(Dispatcher, AppendLogLine);
         LogPathText.Text = _log.FilePath ?? "(no log file)";
         _log.Info("SkyRender " + SkyRenderInfo.Version + " cell demo");
@@ -69,38 +77,39 @@ public partial class MainWindow : Window
         RingBox.IsChecked = _options.Ring;
         foreach (var c in _options.Cycle) _cycle.Enqueue(c);
 
+        _view = new SkyRenderView(_options.Host ?? SkyRenderView.DefaultMode)
+        {
+            Camera = _camera,
+            ShowReadout = true,
+            RenderMode = _options.Continuous ? ViewRenderMode.Continuous : ViewRenderMode.OnDemand,
+            // An on-demand view draws only on change; these are the changes it cannot see for itself.
+            KeepDrawing = () => _pending != null || _scene is { Installed: false } || _settleFrames > 0 || _orbitStartSeconds >= 0,
+        };
+        _view.RenderFrame += View_RenderFrame;
+        _view.Input += View_Input;
+        _view.GlClosing += () =>
+        {
+            _scene?.Dispose();
+            _scene = null;
+            _renderer?.Dispose();
+            _renderer = null;
+        };
+        GlHost.Children.Add(_view);
+        _log.Info($"3D view host: {_view.Mode}, {_view.RenderMode}.");
+
         Loaded += async (_, _) =>
         {
-            StartGl();
             if (_options.Size is { } size) FitWindowToView(size.W, size.H);
             await OpenGameAsync(_options.DataFolder);
         };
-        Closed += (_, _) =>
+        // Closing, not Closed: the view frees its GL objects (GlClosing) while its window still exists.
+        Closing += (_, _) =>
         {
+            FinishFrameLog(0, 0);   // a run without --orbit records until the window closes
             _loadCts?.Cancel();
-            _scene?.Dispose();
-            _renderer?.Dispose();
-            _game?.Dispose();
+            _view.Dispose();
         };
-    }
-
-    private void StartGl()
-    {
-        try
-        {
-            GlControl.Start(new GLWpfControlSettings { MajorVersion = 3, MinorVersion = 3, RenderContinuously = true });
-            // GLWpfControl 4.x hooks its render loop up in IsVisibleChanged, which never fires for a
-            // control that is already visible when Start() runs: without this toggle no frame is drawn
-            // until something else forces a redraw (USAGE.md, section 3).
-            GlControl.Visibility = Visibility.Collapsed;
-            GlControl.Visibility = Visibility.Visible;
-            _log.Info("GL control started (requested OpenGL 3.3).");
-        }
-        catch (Exception ex)
-        {
-            _log.LogError("Could not start the GL control", ex);
-            StatusText.Text = "OpenGL could not start: " + ex.Message;
-        }
+        Closed += (_, _) => _game?.Dispose();
     }
 
     // ---- the game ----
@@ -301,11 +310,12 @@ public partial class MainWindow : Window
         _log.Info($"{cell.Display} read in {clock.ElapsedMilliseconds} ms ({string.Join(", ", prepared.Timings)}); " +
             $"{prepared.Models.Count} distinct model(s){(prepared.MissingModels > 0 ? $", {prepared.MissingModels} not found" : "")}. Uploading.");
         _pending = prepared;   // picked up by the next frame
+        _view.Invalidate("scene");
     }
 
     // ---- GL ----
 
-    private void GlControl_Render(TimeSpan delta)
+    private void View_RenderFrame(ViewFrame frame)
     {
         try
         {
@@ -330,9 +340,9 @@ public partial class MainWindow : Window
             }
 
             double now = _frameClock.Elapsed.TotalSeconds;
-            float dt = (float)Math.Min(0.1, now - _lastFrameSeconds);
-            _lastFrameSeconds = now;
-            Fly(dt);
+            // --orbit: a steady turn about the target, by the clock so a slow frame does not slow it.
+            if (_orbitStartSeconds >= 0)
+                _camera.Azimuth = _orbitStartAzimuth + (float)((now - _orbitStartSeconds) * _options.OrbitSpeed);
 
             if (_scene is { Installed: false } installing)
             {
@@ -350,15 +360,40 @@ public partial class MainWindow : Window
                 _renderer.ShadowBounds = (_camera.Target, radius);
             }
 
-            var source = PresentationSource.FromVisual(GlControl);
-            double sx = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            double sy = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
-            int width = Math.Max(1, (int)(GlControl.ActualWidth * sx));
-            int height = Math.Max(1, (int)(GlControl.ActualHeight * sy));
+            int width = frame.Width, height = frame.Height;
             _renderer.Render(_camera, width, height);
             _lastRenderError = null;
 
-            if (_settleFrames > 0 && --_settleFrames == 0) Screenshot(width, height);
+            if (_orbitStartSeconds >= 0 && now - _orbitStartSeconds >= _orbitSeconds)
+            {
+                _orbitStartSeconds = -1;
+                if (_benchOrbit is { } benchOrbit)
+                {
+                    _benchOrbit = null;
+                    benchOrbit.SetResult();
+                    return;
+                }
+                _orbitDone = true;
+                FinishFrameLog(width, height);
+                Screenshot(width, height);   // saves --shot if asked, then moves the script on
+            }
+            else if (_settleFrames > 0 && --_settleFrames == 0)
+            {
+                if (_options.Bench != null && !_benchStarted)
+                {
+                    _benchStarted = true;
+                    Dispatcher.BeginInvoke(() => _ = RunBenchAsync(width, height));
+                }
+                else if (_options.Orbit is not null && !_orbitDone)
+                {
+                    _orbitStartSeconds = now;
+                    _orbitSeconds = _options.Orbit.Value;
+                    _orbitStartAzimuth = _camera.Azimuth;
+                    if (_options.FpsLog is { } log) _view.StartFrameLog(log);
+                    _log.Info($"Orbit: {_options.Orbit:0.#} s at {_options.OrbitSpeed:0.#} degrees a second, view {width} x {height} px.");
+                }
+                else Screenshot(width, height);
+            }
         }
         catch (Exception ex)
         {
@@ -369,6 +404,20 @@ public partial class MainWindow : Window
                 _log.LogError("Render failed", ex);
                 StatusText.Text = "Render failed: " + ex.Message + " (see the log)";
             }
+        }
+    }
+
+    /// <summary>Writes --fps-log and logs the summary of the frames recorded.</summary>
+    private void FinishFrameLog(int width, int height)
+    {
+        if (_view.StopFrameLog() is not { } result) return;
+        try
+        {
+            _log.Info($"{result.Words()}; view {width} x {height} px, host {_view.Stats.HostLabel}.");
+        }
+        catch (Exception ex)
+        {
+            _log.LogError("Could not write the frame log", ex);
         }
     }
 
@@ -387,7 +436,8 @@ public partial class MainWindow : Window
         _log.Info($"  memory: managed {GC.GetTotalMemory(false) / 1048576.0:0} MB, private {proc.PrivateMemorySize64 / 1048576.0:0} MB; " +
             $"{_renderer!.Meshes.Count} meshes in the renderer.");
         foreach (var t in scene.Textures.MissingTexturePaths.Take(10)) _log.LogMessage("  texture not found: " + t);
-        if (_options.Shot != null || _cycle.Count > 0) _settleFrames = 20;
+        if (_options.Orbit is null && _options.Bench is null && _options.FpsLog is { } log && !_view.Stats.Logging) _view.StartFrameLog(log);
+        if (_options.Shot != null || _cycle.Count > 0 || (_options.Orbit is not null && !_orbitDone) || (_options.Bench != null && !_benchStarted)) _settleFrames = 20;
         else if (_options.Exit) Dispatcher.BeginInvoke(Close);
     }
 
@@ -408,6 +458,8 @@ public partial class MainWindow : Window
         // The game's near plane (fNearDistance 15); the far plane reaches the LOD when it is drawn.
         _camera.NearPlane = data.Interior ? 5f : 15f;
         _camera.FarPlane = data.Interior ? 60000f : (LodBox.IsChecked == true ? SceneLoader.LodReach : 131072f);
+        // Fly speed in units a second (Shift: four times that); rooms are smaller than the outdoors.
+        _view.Controls.FlySpeed = data.Interior ? 400f : 1500f;
 
         // A scripted camera (--eye / --yaw / --pitch): only for the first cell.
         if (_options.Eye is { } eye && !_customEyeUsed)
@@ -426,83 +478,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool _looking;
-    private Point _lookFrom;
-
-    private void GlControl_MouseDown(object sender, MouseButtonEventArgs e)
+    /// <summary>The camera itself is moved by the view's own controls (left-drag orbits, right-drag
+    /// looks, middle-drag pans, the wheel zooms, W A S D Q E fly by the clock); Home is this demo's.</summary>
+    private void View_Input(ViewInput input)
     {
-        GlControl.Focus();
-        var p = e.GetPosition(GlControl);
-        if (e.ChangedButton == MouseButton.Right)
-        {
-            _looking = true;
-            _lookFrom = p;
-        }
-        else
-        {
-            _camera.OnMouseDown((float)p.X, (float)p.Y,
-                e.LeftButton == MouseButtonState.Pressed, e.MiddleButton == MouseButtonState.Pressed);
-        }
-        GlControl.CaptureMouse();
-    }
-
-    private void GlControl_MouseMove(object sender, MouseEventArgs e)
-    {
-        var p = e.GetPosition(GlControl);
-        if (_looking)
-        {
-            // Look around: turn the view about the eye (the orbit's target moves, the eye stays).
-            var eye = _camera.GetEyePosition();
-            _camera.Azimuth -= (float)(p.X - _lookFrom.X) * 0.25f;
-            _camera.Elevation = Math.Clamp(_camera.Elevation + (float)(p.Y - _lookFrom.Y) * 0.25f, -89f, 89f);
-            _camera.Target = eye - OrbitOffset();
-            _lookFrom = p;
-            return;
-        }
-        _camera.OnMouseMove((float)p.X, (float)p.Y, (float)GlControl.ActualHeight);
-    }
-
-    private void GlControl_MouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ChangedButton == MouseButton.Right) _looking = false;
-        else _camera.OnMouseUp();
-        if (!_looking && e.LeftButton == MouseButtonState.Released && e.MiddleButton == MouseButtonState.Released)
-            GlControl.ReleaseMouseCapture();
-    }
-
-    private void GlControl_MouseWheel(object sender, MouseWheelEventArgs e) => _camera.OnMouseWheel(e.Delta);
-
-    private void GlControl_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Home && _scene is { } s) FrameCamera(s.Scene.Data);
-    }
-
-    /// <summary>The eye's offset from the target (OrbitCamera's spherical coordinates).</summary>
-    private Vector3 OrbitOffset()
-    {
-        float az = MathHelper.DegreesToRadians(_camera.Azimuth), el = MathHelper.DegreesToRadians(_camera.Elevation);
-        return new Vector3(MathF.Cos(el) * MathF.Sin(az), MathF.Sin(el), MathF.Cos(el) * MathF.Cos(az)) * _camera.Distance;
-    }
-
-    /// <summary>Fly: W A S D along the view, Q / E down and up; the eye and target move together.</summary>
-    private void Fly(float dt)
-    {
-        if (!GlControl.IsKeyboardFocused || dt <= 0f) return;
-        var move = Vector3.Zero;
-        var forward = -OrbitOffset().Normalized();
-        var right = Vector3.Cross(forward, Vector3.UnitY);
-        if (right.LengthSquared < 1e-6f) right = Vector3.UnitX;
-        right.Normalize();
-        if (Keyboard.IsKeyDown(Key.W)) move += forward;
-        if (Keyboard.IsKeyDown(Key.S)) move -= forward;
-        if (Keyboard.IsKeyDown(Key.D)) move += right;
-        if (Keyboard.IsKeyDown(Key.A)) move -= right;
-        if (Keyboard.IsKeyDown(Key.E)) move += Vector3.UnitY;
-        if (Keyboard.IsKeyDown(Key.Q)) move -= Vector3.UnitY;
-        if (move.LengthSquared < 1e-6f) return;
-        float speed = (_scene?.Scene.Data.Interior ?? false) ? 400f : 1500f;
-        if (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift)) speed *= 4f;
-        _camera.Target += move.Normalized() * speed * dt;
+        if (input is { Kind: ViewInputKind.KeyDown, Key: Key.Home } && _scene is { } s) FrameCamera(s.Scene.Data);
     }
 
     // ---- scripted runs ----
@@ -520,12 +500,12 @@ public partial class MainWindow : Window
         int passes = 0;
         void Adjust()
         {
-            double dw = w - GlHost.ActualWidth, dh = h - GlHost.ActualHeight;
+            double dw = w - _view.ViewSize.Width, dh = h - _view.ViewSize.Height;
             if (Math.Abs(dw) < 0.5 && Math.Abs(dh) < 0.5) return;
             if (++passes > 8)
             {
-                GlControl.Width = w;
-                GlControl.Height = h;
+                _view.Width = w;
+                _view.Height = h + (_view.ActualHeight - _view.ViewSize.Height);
                 _log.Info($"The window cannot fit a {width} x {height} view on this screen; the view is pinned at that size.");
                 return;
             }
@@ -537,7 +517,7 @@ public partial class MainWindow : Window
         Adjust();
     }
 
-    /// <summary>Saves the 3D view (the bound framebuffer of the GL control) as a PNG.</summary>
+    /// <summary>Saves the 3D view (the frame just drawn, before the host hands it over) as a PNG.</summary>
     private void Screenshot(int width, int height)
     {
         if (_options.Shot is { } shot)

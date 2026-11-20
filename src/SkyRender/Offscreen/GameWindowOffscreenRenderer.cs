@@ -478,8 +478,14 @@ public sealed class GameWindowOffscreenRenderer : IOffscreenRenderer
             // information in the output PNG. If transparent-background
             // exports are ever wanted, this stamp should become conditional
             // on a request flag rather than unconditional.
-            for (int i = 3; i < pixels.Length; i += 4)
-                pixels[i] = 255;
+            //
+            // A transparent-background request is that case: its alpha is coverage
+            // (GlRenderer.TransparentBackground), kept, and the colour un-premultiplied.
+            if (request.TransparentBackground)
+                UnpremultiplyAlpha(pixels);
+            else
+                for (int i = 3; i < pixels.Length; i += 4)
+                    pixels[i] = 255;
 
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
             long tReadbackDone = Stopwatch.GetTimestamp();
@@ -493,7 +499,7 @@ public sealed class GameWindowOffscreenRenderer : IOffscreenRenderer
             // thread. EncodeMs is recorded there. `pixels` is a fresh per-render
             // allocation (ReadPixelsRgba), so the encode task owns it outright —
             // the next render's FBO reuse can't race it.
-            return new RenderedFrame(pixels, request.Width, request.Height);
+            return new RenderedFrame(pixels, request.Width, request.Height, request.TransparentBackground);
         }
         finally
         {
@@ -521,9 +527,33 @@ public sealed class GameWindowOffscreenRenderer : IOffscreenRenderer
     }
 
     /// <summary>A rendered frame's read-back pixels (RGBA8, top-left origin,
-    /// alpha stamped to 255) awaiting CPU encode. Decoupled from the render
+    /// alpha stamped to 255, or straight coverage alpha when <paramref name="HasAlpha"/>)
+    /// awaiting CPU encode. Decoupled from the render
     /// thread so the encode can run on the thread pool.</summary>
-    private readonly record struct RenderedFrame(byte[] Pixels, int Width, int Height);
+    private readonly record struct RenderedFrame(byte[] Pixels, int Width, int Height, bool HasAlpha);
+
+    /// <summary>
+    /// Turns premultiplied RGBA8 into straight alpha, in place. A transparent-background frame is
+    /// drawn over (0, 0, 0, 0), so wherever alpha is below 255 (an antialiased edge, a blended
+    /// surface over nothing) the colour is already mixed with black by that alpha; PNG and
+    /// BGRA32 consumers expect the surface's own colour beside its alpha.
+    /// </summary>
+    internal static void UnpremultiplyAlpha(byte[] rgba)
+    {
+        for (int i = 0; i + 3 < rgba.Length; i += 4)
+        {
+            int a = rgba[i + 3];
+            if (a == 255) continue;
+            if (a == 0)
+            {
+                rgba[i] = rgba[i + 1] = rgba[i + 2] = 0;
+                continue;
+            }
+            rgba[i] = (byte)Math.Min(255, (rgba[i] * 255 + a / 2) / a);
+            rgba[i + 1] = (byte)Math.Min(255, (rgba[i + 1] * 255 + a / 2) / a);
+            rgba[i + 2] = (byte)Math.Min(255, (rgba[i + 2] * 255 + a / 2) / a);
+        }
+    }
 
     /// <summary>Offloads the PNG/BGRA encode of a rendered frame to the thread
     /// pool and completes the job's <see cref="TaskCompletionSource{TResult}"/>
@@ -547,7 +577,9 @@ public sealed class GameWindowOffscreenRenderer : IOffscreenRenderer
             {
                 long tEncodeStart = Stopwatch.GetTimestamp();
                 byte[] encoded = encodeAsPng
-                    ? EncodePngFromRgba(frame.Pixels, frame.Width, frame.Height)
+                    ? (frame.HasAlpha
+                        ? PngWriter.EncodeRgba(frame.Pixels, frame.Width, frame.Height)
+                        : EncodePngFromRgba(frame.Pixels, frame.Width, frame.Height))
                     : RgbaToBgra(frame.Pixels);
                 if (timings != null)
                     timings.EncodeMs = MsBetween(tEncodeStart, Stopwatch.GetTimestamp());
@@ -579,8 +611,19 @@ public sealed class GameWindowOffscreenRenderer : IOffscreenRenderer
         float r = request.BackgroundRgb.R / 255f;
         float g = request.BackgroundRgb.G / 255f;
         float b = request.BackgroundRgb.B / 255f;
-        scene.Renderer.ClearColor = new Vector3(r, g, b);
-        GL.ClearColor(r, g, b, 1f);
+        // A transparent background leaves the renderer's ClearColor alone: it is also the
+        // sky colour water reflects, which the scene builder owns. Assigned on every render
+        // because a builder may hand the same renderer to requests of both kinds.
+        scene.Renderer.TransparentBackground = request.TransparentBackground;
+        if (request.TransparentBackground)
+        {
+            GL.ClearColor(0f, 0f, 0f, 0f);
+        }
+        else
+        {
+            scene.Renderer.ClearColor = new Vector3(r, g, b);
+            GL.ClearColor(r, g, b, 1f);
+        }
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
         // Last chance to bail before the draw + readback + encode. Past this

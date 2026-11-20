@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The live view host: shows a SkyRender scene inside a WPF window, paces its frames, and
+       brings the frame-rate readout, the frame log and the clock-based fly controls. Kept apart
+       from the core (plain net8.0, no WPF) and from the character tier (ReactiveUI, weavers), so
+       a cell or scene viewer takes only this. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SkyRender.Wpf</RootNamespace>
+    <AssemblyName>SkyRender.Wpf</AssemblyName>
+    <PackageId>SkyRender.Wpf</PackageId>
+    <Product>SkyRender.Wpf</Product>
+    <Description>WPF view host for SkyRender: a paced live view (native child window, or a shared texture inside WPF), frame-rate readout, per-frame log and clock-based fly controls.</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SkyRender.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SkyRender\SkyRender.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shared-texture host (ViewHostMode.WpfTexture). Same version as SkyRender.Character. -->
+    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
+  </ItemGroup>
+
+</Project>

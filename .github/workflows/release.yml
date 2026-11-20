@@ -1,4 +1,5 @@
-# Builds, tests and publishes SkyRender + SkyRender.Character to nuget.org when a v* tag is pushed.
+# Builds, tests and publishes SkyRender, SkyRender.Wpf and SkyRender.Character to nuget.org when a
+# v* tag is pushed.
 # Uses nuget.org Trusted Publishing (no stored API key).
 name: release
 
@@ -8,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest        # SkyRender.Character is a WPF library
+    runs-on: windows-latest        # SkyRender.Wpf and SkyRender.Character are WPF libraries
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -24,7 +25,8 @@ jobs:
 
       - run: dotnet restore SkyRender.sln
       - run: dotnet build SkyRender.sln -c Release --no-restore -p:ContinuousIntegrationBuild=true
-      - run: dotnet test SkyRender.sln -c Release --no-build
+      # Needs=GL tests open a GL 3.3 window on screen; the hosted runner has no GPU for one.
+      - run: dotnet test SkyRender.sln -c Release --no-build --filter "Needs!=GL"
       - run: dotnet pack SkyRender.sln -c Release --no-build -o artifacts -p:ContinuousIntegrationBuild=true
 
       - uses: actions/upload-artifact@v4
@@ -51,13 +53,19 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USER }}
 
-      # Core first: SkyRender.Character depends on it. Each push also uploads the .snupkg beside it.
+      # Core first: SkyRender.Wpf and SkyRender.Character depend on it. Each push also uploads the .snupkg beside it.
       # -Filter only understands * and ?, so the version digit is matched with -match instead.
       - name: Push SkyRender
         shell: pwsh
         run: |
           $pkg = Get-ChildItem artifacts -Filter '*.nupkg' | Where-Object Name -match '^SkyRender\.\d' | Select-Object -First 1
           if (-not $pkg) { throw "SkyRender .nupkg not found in artifacts" }
+          dotnet nuget push $pkg.FullName --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
+      - name: Push SkyRender.Wpf
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem artifacts -Filter '*.nupkg' | Where-Object Name -match '^SkyRender\.Wpf\.\d' | Select-Object -First 1
+          if (-not $pkg) { throw "SkyRender.Wpf .nupkg not found in artifacts" }
           dotnet nuget push $pkg.FullName --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
       - name: Push SkyRender.Character
         shell: pwsh

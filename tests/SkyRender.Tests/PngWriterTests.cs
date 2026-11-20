@@ -50,7 +50,7 @@ public class PngWriterTests
         pos.Should().Be(png.Length);
     }
 
-    private static byte[] Decode(byte[] png, out int width, out int height)
+    internal static byte[] Decode(byte[] png, out int width, out int height, int channels = 3)
     {
         png.AsSpan(0, 8).ToArray().Should().Equal(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A);
         width = height = 0;
@@ -66,7 +66,7 @@ public class PngWriterTests
                 width = BinaryPrimitives.ReadInt32BigEndian(data);
                 height = BinaryPrimitives.ReadInt32BigEndian(data[4..]);
                 data[8].Should().Be(8);
-                data[9].Should().Be(2);
+                data[9].Should().Be((byte)(channels == 4 ? 6 : 2));
             }
             else if (type == "IDAT") idat.Write(data);
             pos += 12 + len;
@@ -78,7 +78,7 @@ public class PngWriterTests
         z.CopyTo(raw);
         var f = raw.ToArray();
 
-        int stride = width * 3;
+        int stride = width * channels;
         var outp = new byte[stride * height];
         for (int y = 0; y < height; y++)
         {
@@ -86,9 +86,9 @@ public class PngWriterTests
             f[src].Should().Be(4);
             for (int i = 0; i < stride; i++)
             {
-                int a = i >= 3 ? outp[y * stride + i - 3] : 0;
+                int a = i >= channels ? outp[y * stride + i - channels] : 0;
                 int b = y > 0 ? outp[(y - 1) * stride + i] : 0;
-                int c = i >= 3 && y > 0 ? outp[(y - 1) * stride + i - 3] : 0;
+                int c = i >= channels && y > 0 ? outp[(y - 1) * stride + i - channels] : 0;
                 int p = a + b - c, pa = Math.Abs(p - a), pb = Math.Abs(p - b), pc = Math.Abs(p - c);
                 int pred = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
                 outp[y * stride + i] = (byte)(f[src + 1 + i] + pred);

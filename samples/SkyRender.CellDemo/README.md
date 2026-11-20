@@ -40,13 +40,43 @@ Picking another cell cancels the load still running. A load runs on a worker thr
 model parsing, archive extraction); the GL upload then goes in a slice per frame, and the previous
 cell's meshes and textures are freed first.
 
-Optional arguments for scripted checks (screenshots, switching tests) are listed in
+Optional arguments for scripted checks (screenshots, switching tests, map tiles) are listed in
 [StartupOptions.cs](StartupOptions.cs), for example:
 
 ```bash
 SkyRender.CellDemo.exe --cell WhiterunBanneredMare --shot mare.png --exit
 SkyRender.CellDemo.exe --world Tamriel --grid 4,-12 --ring --lod --eye 15000,-47000,10000 --yaw 76 --pitch 68 --shot riverwood.png --exit
+SkyRender.CellDemo.exe --world WhiterunWorld --grid 5,-2 --ring --tile market.png --tile-rect 20480,-12288,28672,-4096
 ```
+
+The 3D view is SkyRender's own view host, `SkyRender.Wpf.SkyRenderView`: it paces the frames,
+moves the camera (the mouse and fly controls above, flying by the clock) and draws only while
+something changed. The line above the view is its readout: frames a second, the median frame
+time, the mean of the slowest 1%, the worst, and the render call, over the last two seconds; it
+reads "idle" while nothing moves.
+
+`--host native` (the default) hosts the view in a native child window; `--host wpf` hosts it in a
+texture shared with WPF (`GLWpfControl`). `--continuous` draws at every refresh.
+
+For frame times with no hand on the mouse:
+
+```bash
+SkyRender.CellDemo.exe --world Tamriel --grid 30,20 --orbit 20 --fps-log frames.csv --exit
+SkyRender.CellDemo.exe --world WhiterunWorld --grid 5,-2 --ring --size 1600x900 --host native --bench out
+```
+
+The first turns the camera about its target for 20 seconds, writes one row per frame
+(`SkyRender.Viewing.FrameStats.CsvHeader` names the columns) and closes. The second brings the
+window to the front and logs four steps from the same starting view: still, a scripted orbit, a
+right-drag look and a held-key fly. The look and the fly are posted as real mouse and key messages,
+so they take the path a hand's input takes ([BenchRun.cs](BenchRun.cs)). It writes `out/look.csv`
+and the rest, and one row per step in `out/bench.tsv`. Keep your hands off the mouse and keyboard
+while it runs.
+
+The last example above opens no window. It draws a top-down map tile of the rectangle (world units: west,
+south, east, north) at 16 units a pixel over a transparent background, and writes `market.txt`
+with the time of the first tile and of the same tile once the scene is loaded
+([TileRun.cs](TileRun.cs)).
 
 ## What it draws
 
